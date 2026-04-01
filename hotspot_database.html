@@ -606,6 +606,58 @@
   }
   .detail-list-badge:hover { opacity: 0.75; }
 
+
+  /* MB COMBINED UPLOADER */
+  .mb-type-row { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .mb-type-label { font-size: 11px; font-weight: 700; color: var(--text2); font-family: 'DM Mono', monospace; white-space: nowrap; }
+  .mb-type-select {
+    background: var(--surface2); border: 1px solid var(--border2); border-radius: 7px;
+    padding: 8px 14px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px;
+    outline: none; cursor: pointer; flex: 1; min-width: 200px;
+  }
+  .mb-type-select:focus { border-color: var(--accent); }
+  .mb-type-desc { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.6; min-height: 32px; }
+
+  /* REPORT GENERATOR */
+  .report-section { margin-bottom: 28px; }
+  .report-section h3 { font-size: 14px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  .report-section p { font-size: 12px; color: var(--text2); margin-bottom: 14px; line-height: 1.6; font-family: 'DM Mono', monospace; }
+  .report-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; display: flex; align-items: center; gap: 16px; margin-bottom: 10px;
+  }
+  .report-card-icon { font-size: 28px; flex-shrink: 0; }
+  .report-card-info { flex: 1; }
+  .report-card-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+  .report-card-desc { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.5; }
+  .report-card-count { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--accent); margin-top: 4px; }
+
+
+  /* REPORT GENERATOR */
+  .report-section { margin-bottom: 28px; }
+  .report-section h3 { font-size: 14px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  .report-section p { font-size: 12px; color: var(--text2); margin-bottom: 14px; line-height: 1.6; font-family: 'DM Mono', monospace; }
+  .report-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; display: flex; align-items: flex-start; gap: 16px;
+  }
+  .report-card-icon { font-size: 28px; flex-shrink: 0; padding-top: 2px; }
+  .report-card-info { flex: 1; }
+  .report-card-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .report-card-desc { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.6; }
+  .report-card-count { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--teal); margin-top: 6px; font-weight: 700; }
+
+  /* MB COMBINED UPLOADER */
+  .mb-type-row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .mb-type-label { font-size: 11px; font-weight: 700; color: var(--text2); font-family: 'DM Mono', monospace; white-space: nowrap; }
+  .mb-type-select {
+    background: var(--surface2); border: 1px solid var(--border2); border-radius: 7px;
+    padding: 8px 14px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px;
+    outline: none; cursor: pointer; flex: 1; min-width: 200px;
+  }
+  .mb-type-select:focus { border-color: var(--accent); }
+  .mb-type-desc { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.6; margin-bottom: 12px; min-height: 18px; }
+
 </style>
 </head>
 <body>
@@ -1311,19 +1363,28 @@ function renderUpload() {
     </div>
 
     <div class="upload-section">
-      <h3>📡 Mobile Beacon Report</h3>
-      <p>Upload an Excel (.xlsx) report from Mobile Beacon.<br>
-      The system will match by IMEI number and update subscription expiration dates from the "Latest Service Plan End Date" column.</p>
-      <div class="upload-drop" id="drop-mb" onclick="document.getElementById('file-mb').click()"
+      <h3>📡 Mobile Beacon Upload</h3>
+      <p>Select the type of Mobile Beacon file you are uploading, then drop or browse for the file.</p>
+      <div class="mb-type-row">
+        <span class="mb-type-label">Report type:</span>
+        <select class="mb-type-select" id="mb-type-select" onchange="updateMBTypeDesc()">
+          <option value="">— Select report type —</option>
+          <option value="renewal">Renewal Report (updates expiration dates)</option>
+          <option value="deactivation">Deactivation Report (marks hotspots as deactivated)</option>
+          <option value="active">Active List (full reconciliation — deactivates anything not on list)</option>
+        </select>
+      </div>
+      <div class="mb-type-desc" id="mb-type-desc" style="margin-bottom:12px"></div>
+      <div class="upload-drop" id="drop-mb-combined" onclick="document.getElementById('file-mb-combined').click()"
         ondragover="event.preventDefault();this.classList.add('dragover')"
         ondragleave="this.classList.remove('dragover')"
-        ondrop="event.preventDefault();this.classList.remove('dragover');handleMBFile(event.dataTransfer.files[0])">
-        <input type="file" id="file-mb" accept=".xlsx,.xls,.csv" onchange="handleMBFile(this.files[0])">
+        ondrop="event.preventDefault();this.classList.remove('dragover');handleMBCombined(event.dataTransfer.files[0])">
+        <input type="file" id="file-mb-combined" accept=".xlsx,.xls,.csv" onchange="handleMBCombined(this.files[0])">
         <div class="upload-icon">📡</div>
-        <div class="upload-title">Drop Mobile Beacon Report here or click to browse</div>
-        <div class="upload-hint">Accepts .xlsx or .csv · Must contain IMEI and "Latest Service Plan End Date" columns</div>
+        <div class="upload-title">Drop Mobile Beacon file here or click to browse</div>
+        <div class="upload-hint">Accepts .xlsx or .csv · Select report type above before uploading</div>
       </div>
-      <div class="upload-result" id="result-mb"></div>
+      <div class="upload-result" id="result-mb-combined"></div>
     </div>
 
     <div class="upload-section">
@@ -1364,22 +1425,199 @@ function renderUpload() {
       </div>
     </div>
 
-    <div class="upload-section">
-      <h3>🔄 Mobile Beacon Active List</h3>
-      <p>Upload the full active device list from Mobile Beacon.<br>
-      This is a <strong>reconciliation tool</strong> — any hotspot in our system whose IMEI does <em>not</em> appear in this list will be marked as <strong>Deactivated</strong> and moved to the Archive. Expiration dates will also be updated for matched devices.<br>
-      Hotspots with no IMEI on record will be skipped. Use this whenever you need to fully resync the system with Mobile Beacon.</p>
-      <div class="upload-drop" id="drop-mb-active" onclick="document.getElementById('file-mb-active').click()"
-        ondragover="event.preventDefault();this.classList.add('dragover')"
-        ondragleave="this.classList.remove('dragover')"
-        ondrop="event.preventDefault();this.classList.remove('dragover');handleMBActiveFile(event.dataTransfer.files[0])">
-        <input type="file" id="file-mb-active" accept=".xlsx,.xls,.csv" onchange="handleMBActiveFile(this.files[0])">
-        <div class="upload-icon">🔄</div>
-        <div class="upload-title">Drop MB Active List here or click to browse</div>
-        <div class="upload-hint">Accepts .xlsx or .csv · Must contain IMEI column · Any hotspot not on this list will be marked Deactivated</div>
+    <div class="report-section">
+      <h3>📥 Generate Reports</h3>
+      <p>Generate formatted export files ready to upload directly into Alma.</p>
+      <div class="report-card">
+        <div class="report-card-icon">📋</div>
+        <div class="report-card-info">
+          <div class="report-card-title">Alma Bulk Update — Expiration Dates &amp; Deactivations</div>
+          <div class="report-card-desc">Generates an Excel file for all hotspots whose expiration dates or deactivation status changed in the most recent Mobile Beacon upload. Formatted exactly as Alma expects: barcode · internal_note_1 (IMEI) · internal_note_2 (phone) · internal_note_3 (exp date or "Deactivated") · description (updated copy # + exp).</div>
+          <div class="report-card-count" id="alma-report-count">—</div>
+        </div>
+        <button class="btn-primary" onclick="generateAlmaReport()" style="flex-shrink:0;margin-left:12px">⬇ Generate</button>
       </div>
-      <div class="upload-result" id="result-mb-active"></div>
-    </div>`;
+    </div>
+
+`;
+  // Update the Alma report count after render
+  setTimeout(() => {
+    const changed = state.hotspots.filter(h => h.last_mb_updated).length;
+    const el = document.getElementById('alma-report-count');
+    if (el) el.textContent = changed > 0
+      ? changed + ' device' + (changed !== 1 ? 's' : '') + ' have pending Alma updates'
+      : 'No pending updates — upload a Mobile Beacon file first';
+  }, 0);
+}
+
+// ============================================================
+// MB COMBINED UPLOADER — dropdown router
+// ============================================================
+function updateMBTypeDesc() {
+  const sel = document.getElementById('mb-type-select');
+  const desc = document.getElementById('mb-type-desc');
+  if (!sel || !desc) return;
+  const descs = {
+    renewal:     '📅 Updates subscription expiration dates for matched devices. Matches by IMEI. Clears Sent for Renewal flag when confirmed.',
+    deactivation:'⊘ Marks matched hotspots as Deactivated and moves them to the Archive. Matches by IMEI or Barcode.',
+    active:      '🔄 Full reconciliation — any hotspot NOT on this list will be marked Deactivated. Updates exp dates for matched devices.',
+  };
+  desc.textContent = descs[sel.value] || '';
+}
+
+function handleMBCombined(file) {
+  if (!file) return;
+  const sel = document.getElementById('mb-type-select');
+  const type = sel ? sel.value : '';
+  if (!type) {
+    showResult('result-mb-combined', '❌ Please select a report type from the dropdown before uploading.', 'error');
+    return;
+  }
+  if (type === 'renewal')     handleMBFile(file, 'combined');
+  if (type === 'deactivation') handleMBDeactivationFile(file);
+  if (type === 'active')      handleMBActiveFile(file, 'combined');
+}
+
+// ============================================================
+// MB DEACTIVATION LIST HANDLER
+// ============================================================
+function handleMBDeactivationFile(file) {
+  if (!file) return;
+  showResult('result-mb-combined', 'Processing…', 'info');
+  takeSnapshot();
+  parseFile(file, (err, rows) => {
+    if (err) { showResult('result-mb-combined', '❌ Error: ' + err, 'error'); return; }
+
+    const sample = rows[0] || {};
+    const keys = Object.keys(sample);
+
+    // Find IMEI and barcode columns
+    const imeiCol    = keys.find(k => /imei/i.test(k));
+    const barcodeCol = keys.find(k => /barcode/i.test(k));
+
+    if (!imeiCol && !barcodeCol) {
+      showResult('result-mb-combined', '❌ Could not find IMEI or Barcode column.', 'error');
+      return;
+    }
+
+    // Build lookup maps
+    const byIMEI    = {};
+    const byBarcode = {};
+    state.hotspots.forEach(h => {
+      if (h.imei)    byIMEI[h.imei.trim()]       = h;
+      if (h.barcode) byBarcode[h.barcode.trim()]  = h;
+    });
+
+    let deactivated = 0, skipped = 0, alreadyDeact = 0;
+    const events = [];
+
+    rows.forEach(row => {
+      let h = null;
+      if (imeiCol) {
+        const imei = String(row[imeiCol] || '').trim().replace(/\D/g, '');
+        if (imei && imei.length >= 14) h = byIMEI[imei];
+      }
+      if (!h && barcodeCol) {
+        const b = String(row[barcodeCol] || '').trim();
+        if (b) h = byBarcode[b];
+      }
+
+      if (!h) { skipped++; return; }
+
+      if (h.sub_status === 'Deactivated') { alreadyDeact++; return; }
+
+      // Mark as deactivated
+      h.sub_status    = 'Deactivated';
+      h.mb_deactivated = true;
+      h.last_mb_updated = true; // include in Alma export
+      recalcTabs(h);
+      deactivated++;
+      events.push({
+        type: 'deactivated_mb',
+        copy_num: h.copy_num,
+        barcode: h.barcode || '',
+        device_type: h.device_type,
+        library: h.library,
+        desc: 'Deactivated by MB Deactivation Report',
+        detail: '',
+      });
+    });
+
+    if (events.length) {
+      recordUpload('MB Deactivation Report', events);
+      saveState();
+    }
+    updateBadges();
+
+    showResult('result-mb-combined',
+      `✅ MB Deactivation Report processed — <strong>${deactivated}</strong> hotspot${deactivated!==1?'s':''} marked Deactivated and moved to Archive.` +
+      (alreadyDeact ? ` ${alreadyDeact} were already deactivated.` : '') +
+      (skipped ? ` ${skipped} rows could not be matched.` : ''),
+      deactivated > 0 ? 'success' : 'info'
+    );
+    notify(`MB Deactivation: ${deactivated} hotspots archived`, deactivated > 0 ? 'info' : 'success');
+  });
+}
+
+// ============================================================
+// ALMA BULK UPDATE REPORT GENERATOR
+// ============================================================
+function generateAlmaReport() {
+  const pending = state.hotspots.filter(h => h.last_mb_updated);
+  if (!pending.length) {
+    notify('No pending Alma updates — upload a Mobile Beacon file first', 'error');
+    return;
+  }
+
+  loadSheetJS(() => {
+    // Format date as M/D/YY
+    function fmtExp(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(-2);
+      } catch { return dateStr; }
+    }
+
+    // Build description: keep "c. X" prefix, update/add exp or (Deactivated)
+    function buildDesc(h) {
+      const base = h.description || '';
+      // Strip existing exp date and deactivated suffix, keep "c. X" prefix
+      const prefix = base.match(/^[Cc]\.?\s*\d+/)?.[0] || ('c. ' + h.copy_num);
+      if (h.mb_deactivated || h.sub_status === 'Deactivated') {
+        const expPart = h.exp_date ? ' exp ' + fmtExp(h.exp_date) : '';
+        return prefix + expPart + ' (Deactivated)';
+      }
+      return prefix + ' exp ' + fmtExp(h.exp_date);
+    }
+
+    const rows = pending.map(h => ({
+      barcode:         h.barcode || '',
+      internal_note_1: h.imei   || '',
+      internal_note_2: h.phone  || '',
+      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated') ? 'Deactivated' : fmtExp(h.exp_date),
+      description:     buildDesc(h),
+    }));
+
+    const ws   = XLSX.utils.json_to_sheet(rows);
+    const wb   = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Alma Update');
+
+    // Auto-size columns
+    const colWidths = [20, 20, 18, 16, 36];
+    ws['!cols'] = colWidths.map(w => ({ wch: w }));
+
+    const today = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, 'alma_bulk_update_' + today + '.xlsx');
+
+    // Clear the last_mb_updated flags after export
+    pending.forEach(h => { h.last_mb_updated = false; });
+    saveState();
+    updateBadges();
+    if (state.page === 'upload') renderUpload();
+
+    notify('Alma report generated — ' + rows.length + ' records exported', 'success');
+  });
 }
 
 // ============================================================
@@ -1592,12 +1830,14 @@ function handleLISFile(file) {
 // ============================================================
 // MOBILE BEACON UPLOAD HANDLER
 // ============================================================
-function handleMBFile(file) {
+function handleMBFile(file, resultTarget) {
   if (!file) return;
-  showResult('result-mb', 'Processing…', 'info');
+  const mbResultId = resultTarget === 'combined' ? 'result-mb-combined' : 'result-mb';
+  showResult(mbResultId, 'Processing…', 'info');
+  takeSnapshot();
   takeSnapshot();
   parseFile(file, (err, rows) => {
-    if (err) { showResult('result-mb', '❌ Error: ' + err, 'error'); return; }
+    if (err) { showResult(mbResultId, '❌ Error: ' + err, 'error'); return; }
 
     // Find IMEI column and plan end date column
     const sample = rows[0] || {};
@@ -1605,8 +1845,8 @@ function handleMBFile(file) {
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
     const phoneCol = Object.keys(sample).find(k => /phone|msisdn|number/i.test(k));
 
-    if (!imeiCol) { showResult('result-mb', '❌ Could not find IMEI column.', 'error'); return; }
-    if (!dateCol) { showResult('result-mb', '❌ Could not find "Latest Service Plan End Date" column.', 'error'); return; }
+    if (!imeiCol) { showResult(mbResultId, '❌ Could not find IMEI column.', 'error'); return; }
+    if (!dateCol) { showResult(mbResultId, '❌ Could not find "Latest Service Plan End Date" column.', 'error'); return; }
 
     // Build IMEI → hotspot map
     const imeiMap = {};
@@ -1647,6 +1887,7 @@ function handleMBFile(file) {
             h.sent_for_renewal = false;
             h.renewal_sent_date = null;
           }
+          h.last_mb_updated = true; // flag for Alma export
           recalcTabs(h);
         }
         matched++;
@@ -1661,7 +1902,7 @@ function handleMBFile(file) {
     recordUpload('Mobile Beacon Report', buildMBChangeEvents(changes));
     updateBadges();
 
-    showResult('result-mb', `✅ Processed ${rows.length} rows — ${matched} IMEI matches, ${changes.length} expiration dates updated, ${unmatched} unmatched IMEIs.`, 'success');
+    showResult(mbResultId, `✅ Processed ${rows.length} rows — ${matched} IMEI matches, ${changes.length} expiration dates updated, ${unmatched} unmatched IMEIs.`, 'success');
     saveState();
     notify(`MB upload: ${changes.length} exp dates updated`, 'success');
   });
@@ -1826,25 +2067,26 @@ function clearRenewalList() {
 // ============================================================
 // MOBILE BEACON ACTIVE LIST HANDLER (full reconciliation)
 // ============================================================
-function handleMBActiveFile(file) {
+function handleMBActiveFile(file, resultTarget) {
   if (!file) return;
-  showResult('result-mb-active', 'Processing…', 'info');
+  const mbResultId = resultTarget === 'combined' ? 'result-mb-combined' : 'result-mb-active';
+  showResult(mbResultId, 'Processing…', 'info');
 
   // Confirm before proceeding — this is a destructive reconciliation
   if (!confirm('⚠️ This will mark ALL hotspots whose IMEI is not found in this list as DEACTIVATED and move them to the Archive.\n\nThis action will update ' + state.hotspots.length + ' device records.\n\nAre you sure you want to proceed?')) {
-    showResult('result-mb-active', 'Cancelled.', 'info');
+    showResult(mbResultId, 'Cancelled.', 'info');
     return;
   }
 
   takeSnapshot();
   parseFile(file, (err, rows) => {
-    if (err) { showResult('result-mb-active', '❌ Error: ' + err, 'error'); return; }
+    if (err) { showResult(mbResultId, '❌ Error: ' + err, 'error'); return; }
 
     const sample = rows[0] || {};
 
     // Find IMEI column
     const imeiCol = Object.keys(sample).find(k => /imei/i.test(k));
-    if (!imeiCol) { showResult('result-mb-active', '❌ Could not find IMEI column in this file.', 'error'); return; }
+    if (!imeiCol) { showResult(mbResultId, '❌ Could not find IMEI column in this file.', 'error'); return; }
 
     // Find optional columns
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
@@ -1858,7 +2100,7 @@ function handleMBActiveFile(file) {
     });
 
     if (!activeIMEIs.size) {
-      showResult('result-mb-active', '❌ No valid IMEIs found in this file. Check the IMEI column.', 'error');
+      showResult(mbResultId, '❌ No valid IMEIs found in this file. Check the IMEI column.', 'error');
       return;
     }
 
@@ -1926,7 +2168,8 @@ function handleMBActiveFile(file) {
         if (h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
           changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
           h.sub_status = 'Deactivated';
-          h.mb_deactivated = true;  // flag so we know this came from MB reconciliation
+          h.mb_deactivated = true;
+          h.last_mb_updated = true; // flag for Alma export
           recalcTabs(h);
           deactivated++;
         }
@@ -1943,7 +2186,7 @@ function handleMBActiveFile(file) {
       <strong>${deactivated}</strong> hotspots marked Deactivated (not on MB list) &nbsp;·&nbsp;
       <strong>${updated}</strong> records updated (exp date / phone) &nbsp;·&nbsp;
       <strong>${skipped}</strong> skipped (no IMEI on record)`;
-    showResult('result-mb-active', summary, deactivated > 0 ? 'info' : 'success');
+    showResult(mbResultId, summary, deactivated > 0 ? 'info' : 'success');
     saveState();
     notify(`MB reconciliation complete: ${deactivated} deactivated, ${updated} updated`, deactivated > 0 ? 'info' : 'success');
   });
