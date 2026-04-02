@@ -3130,6 +3130,7 @@ async function saveState() {
   const toSaveCloud = { ...toSave, changeHistory: changeHistoryCloud };
 
   try {
+    // Try PATCH first (update existing row)
     const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main', {
       method: 'PATCH',
       headers: {
@@ -3138,16 +3139,33 @@ async function saveState() {
         'Authorization': 'Bearer ' + SUPABASE_KEY,
         'Prefer': 'return=minimal',
       },
-      body: JSON.stringify({ data: toSaveCloud, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ data: toSaveCloud }),
     });
     if (!res.ok) {
-      const err = await res.text();
-      console.warn('Supabase save failed:', err);
-      notify('⚠️ Cloud save failed — data saved locally only', 'error');
+      const errText = await res.text();
+      console.warn('Supabase PATCH failed (' + res.status + '):', errText);
+      // Try upsert as fallback in case row doesn't exist
+      const res2 = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_KEY,
+          'Prefer': 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({ id: 'main', data: toSaveCloud }),
+      });
+      if (!res2.ok) {
+        const err2 = await res2.text();
+        console.warn('Supabase upsert also failed (' + res2.status + '):', err2);
+        notify('⚠️ Cloud save failed (' + res2.status + ') — check console for details', 'error');
+      } else {
+        console.log('✓ Saved via upsert fallback');
+      }
     }
   } catch(e) {
     console.warn('Supabase unreachable:', e.message);
-    notify('⚠️ Cloud save failed — data saved locally only', 'error');
+    notify('⚠️ Cloud save failed — check your internet connection', 'error');
   }
 }
 
