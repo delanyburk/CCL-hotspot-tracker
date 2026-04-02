@@ -1550,27 +1550,19 @@ function renderUpload() {
 
     <div class="report-section">
       <h3>📥 Generate Reports</h3>
-      <p>Generate formatted export files ready to upload directly into Alma.</p>
+      <p>After uploading a Mobile Beacon file, go to <strong style="color:var(--accent)">Recent Changes</strong> to generate the Alma Bulk Update report for that specific upload.</p>
       <div class="report-card">
         <div class="report-card-icon">📋</div>
         <div class="report-card-info">
           <div class="report-card-title">Alma Bulk Update — Expiration Dates &amp; Deactivations</div>
-          <div class="report-card-desc">Generates an Excel file for all hotspots whose expiration dates or deactivation status changed in the most recent Mobile Beacon upload. Formatted exactly as Alma expects: barcode · internal_note_1 (IMEI) · internal_note_2 (phone) · internal_note_3 (exp date or "Deactivated") · description (updated copy # + exp).</div>
-          <div class="report-card-count" id="alma-report-count">—</div>
+          <div class="report-card-desc">Each Mobile Beacon upload in Recent Changes has its own <strong>📋 Alma Export</strong> button. This generates an Excel file with all exp date changes and deactivations from that specific upload — formatted exactly as Alma expects: barcode · internal_note_1 (IMEI) · internal_note_2 (phone) · internal_note_3 (exp date) · description.</div>
+          <div class="report-card-count" style="color:var(--accent)">→ Go to Recent Changes to export</div>
         </div>
-        <button class="btn-primary" onclick="generateAlmaReport()" style="flex-shrink:0;margin-left:12px">⬇ Generate</button>
+        <button class="btn-primary" onclick="showPage('changes')" style="flex-shrink:0;margin-left:12px">View Changes</button>
       </div>
     </div>
 
 `;
-  // Update the Alma report count after render
-  setTimeout(() => {
-    const changed = state.hotspots.filter(h => h.last_mb_updated).length;
-    const el = document.getElementById('alma-report-count');
-    if (el) el.textContent = changed > 0
-      ? changed + ' device' + (changed !== 1 ? 's' : '') + ' have pending Alma updates'
-      : 'No pending updates — upload a Mobile Beacon file first';
-  }, 0);
 }
 
 // ============================================================
@@ -1749,8 +1741,89 @@ function generateAlmaReport() {
 }
 
 // ============================================================
-// FILE PARSING (CSV and XLSX via SheetJS)
+// ALMA BULK UPDATE REPORT — from a specific upload record
 // ============================================================
+function generateAlmaReportFromRecord(recordId) {
+  const record = state.changeHistory.find(r => r.id === recordId);
+  if (!record) { notify('Upload record not found', 'error'); return; }
+
+  // Gather barcodes of all hotspots changed in this upload
+  const changedBarcodes = new Set();
+  record.events.forEach(ev => {
+    if (ev.barcode) changedBarcodes.add(ev.barcode);
+    // Also match by copy_num for older records without barcode
+    if (ev.copy_num) {
+      const h = state.hotspots.find(x => x.copy_num === ev.copy_num);
+      if (h && h.barcode) changedBarcodes.add(h.barcode);
+    }
+  });
+
+  // Only include hotspots that had exp-date updates or deactivation/reactivation changes
+  const relevantTypes = new Set(['renewed', 'deactivated_mb', 'restored']);
+  const relevantBarcodes = new Set();
+  record.events.forEach(ev => {
+    if (relevantTypes.has(ev.type) && ev.barcode) relevantBarcodes.add(ev.barcode);
+    if (relevantTypes.has(ev.type) && ev.copy_num) {
+      const h = state.hotspots.find(x => x.copy_num === ev.copy_num);
+      if (h && h.barcode) relevantBarcodes.add(h.barcode);
+    }
+  });
+
+  const pending = state.hotspots.filter(h => h.barcode && relevantBarcodes.has(h.barcode));
+
+  if (!pending.length) {
+    notify('No exp date updates or deactivations found in this upload', 'error');
+    return;
+  }
+
+  loadSheetJS(() => {
+    function fmtExp(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(-2);
+      } catch { return dateStr; }
+    }
+
+    function buildDesc(h) {
+      const base = h.description || '';
+      const prefix = base.match(/^[Cc]\.?\s*\d+/)?.[0] || ('c. ' + h.copy_num);
+      const isDeact = h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked';
+      const isExp   = h.sub_status === 'Expired';
+      if (isDeact) {
+        const expPart = h.exp_date ? ' exp ' + fmtExp(h.exp_date) : '';
+        return prefix + expPart + ' (Deactivated)';
+      }
+      if (isExp) {
+        return prefix + ' exp ' + fmtExp(h.exp_date) + ' (Expired)';
+      }
+      return prefix + ' exp ' + fmtExp(h.exp_date);
+    }
+
+    const rows = pending.map(h => ({
+      barcode:         h.barcode || '',
+      internal_note_1: h.imei   || '',
+      internal_note_2: h.phone  || '',
+      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked') ? 'Deactivated' :
+                       h.sub_status === 'Expired' ? fmtExp(h.exp_date) + ' (Expired)' : fmtExp(h.exp_date),
+      description:     buildDesc(h),
+    }));
+
+    const ws   = XLSX.utils.json_to_sheet(rows);
+    const wb   = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Alma Update');
+    const colWidths = [20, 20, 18, 16, 36];
+    ws['!cols'] = colWidths.map(w => ({ wch: w }));
+
+    const today = new Date().toISOString().split('T')[0];
+    const safeSource = record.source.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    XLSX.writeFile(wb, 'alma_bulk_update_' + safeSource + '_' + today + '.xlsx');
+
+    notify('Alma report generated — ' + rows.length + ' records from this upload', 'success');
+  });
+}
+
+
 function loadSheetJS(cb) {
   if (window.XLSX) { cb(); return; }
   const s = document.createElement('script');
@@ -1995,10 +2068,23 @@ function handleMBFile(file, resultTarget) {
           changes.push(`c.${h.copy_num} (IMEI ${imei}) exp <span class="ch-old">${oldExp||'none'}</span> → <span class="ch-new">${newExp}</span>`);
           h.exp_date = newExp;
           // Update sub_status based on new exp date
+          // Rule 14: if previously deactivated/blocked/expired and now getting a new exp date,
+          // that means the hotspot is active again — reactivate it
           const expDt = new Date(newExp);
-          if (/deactivated/i.test(h.description)) h.sub_status = 'Deactivated';
-          else if (/blocked/i.test(h.description)) h.sub_status = 'Blocked';
-          else h.sub_status = expDt < TODAY ? 'Expired' : 'Active';
+          const isNowActive = expDt >= TODAY;
+          if (isNowActive) {
+            // Clear deactivation flags and reactivate
+            h.mb_deactivated = false;
+            h.sub_status = 'Active';
+            if (changes.length > 0) {
+              const prevStatus = oldExp ? (h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked' ? h.sub_status : '') : '';
+              if (prevStatus) changes.push(`c.${h.copy_num} — <span class="ch-new">REACTIVATED</span> (new exp date from MB renewal)`);
+            }
+          } else {
+            if (/deactivated/i.test(h.description)) h.sub_status = 'Deactivated';
+            else if (/blocked/i.test(h.description)) h.sub_status = 'Blocked';
+            else h.sub_status = 'Expired';
+          }
           // Update phone if MB has it
           if (phoneCol && row[phoneCol]) {
             const ph = String(row[phoneCol]).trim();
@@ -2255,6 +2341,7 @@ function handleMBActiveFile(file, resultTarget) {
           if (newExp && newExp !== h.exp_date) {
             changes.push(`c.${h.copy_num} exp updated: <span class="ch-old">${h.exp_date || 'none'}</span> → <span class="ch-new">${newExp}</span>`);
             h.exp_date = newExp;
+            h.last_mb_updated = true; // flag for Alma export
             changed = true;
           }
         }
@@ -2264,21 +2351,23 @@ function handleMBActiveFile(file, resultTarget) {
           if (ph && ph !== h.phone) { h.phone = ph; changed = true; }
         }
 
-        // If it was previously MB-deactivated, clear that flag
-        if (h.mb_deactivated) {
+        // If it was previously MB-deactivated, blocked, or expired — and it's now on the active list,
+        // that means it has been reactivated. Rule 14: clear deactivation and mark as active.
+        const wasInactive = h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked' || h.sub_status === 'Expired';
+        if (wasInactive) {
           h.mb_deactivated = false;
-          // Restore sub_status from description
-          h.sub_status = getSubStatus(h.description);
-          changes.push(`c.${h.copy_num} — <span class="ch-new">RESTORED</span> (now found on MB active list)`);
+          // sub_status will be set below based on exp date
+          changes.push(`c.${h.copy_num} — <span class="ch-new">REACTIVATED</span> (now found on MB active list)`);
           changed = true;
-        } else if (changed) {
-          // Re-derive sub_status in case exp date changed
-          if (!/deactivated|blocked/i.test(h.description)) {
-            h.sub_status = getSubStatus(h.description.replace(/exp [\d/]+/, 'exp ' + (h.exp_date || '')));
-            if (h.exp_date) {
-              const expDt = new Date(h.exp_date);
-              h.sub_status = expDt < TODAY ? 'Expired' : 'Active';
-            }
+        }
+
+        // Re-derive sub_status from the (possibly updated) exp date
+        if (changed || wasInactive) {
+          if (h.exp_date) {
+            const expDt = new Date(h.exp_date);
+            h.sub_status = expDt < TODAY ? 'Expired' : 'Active';
+          } else {
+            h.sub_status = 'Active'; // on active list, assume active if no exp date
           }
         }
 
@@ -2470,7 +2559,7 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
   const events = [];
   rawChanges.forEach(raw => {
     const clean = raw.replace(/<[^>]+>/g, '');
-    if (clean.includes('RESTORED')) {
+    if (clean.includes('RESTORED') || clean.includes('REACTIVATED')) {
       const m = clean.match(/c\.(\d+)/);
       const cn = m ? parseInt(m[1]) : null;
       const h = state.hotspots.find(x => x.copy_num === cn);
@@ -2542,7 +2631,7 @@ function undoUpload(id) {
   const record = state.changeHistory[idx];
 
   if (!record.snapshot) {
-    notify('No snapshot available for this upload — cannot undo', 'error');
+    notify('No snapshot for this upload — it was recorded before undo-history was enabled. You can use "Reset to Baseline" from Profile Manager if needed.', 'error');
     return;
   }
 
@@ -2598,7 +2687,7 @@ function renderChanges() {
     { key: 'renewed',        label: 'Renewed / Exp Updated', cls: 'rcs-renewed' },
     { key: 'archived',       label: 'Moved to Archive',      cls: 'rcs-archived' },
     { key: 'deactivated_mb', label: 'Deactivated by MB Recon', cls: 'rcs-deactivated' },
-    { key: 'restored',       label: 'Restored (MB Recon)',   cls: 'rcs-restored' },
+    { key: 'restored',       label: 'Restored / Reactivated (MB)', cls: 'rcs-restored' },
     { key: 'status_change',  label: 'Status Changes',        cls: 'rcs-status' },
     { key: 'sent_for_renewal', label: 'Sent for Renewal',       cls: 'rcs-teal' },
     { key: 'new_device',       label: 'New Devices Added',     cls: 'rcs-new' },
@@ -2622,11 +2711,15 @@ function renderChanges() {
 
 
     const hasSnapshot = !!record.snapshot;
+    const isMBUpload = record.source.toLowerCase().includes('mobile beacon') || record.source.toLowerCase().includes('mb ');
+    // Count exp-date changes and deactivations for Alma export
+    const almaCount = record.events.filter(e => ['renewed','deactivated_mb','restored'].includes(e.type)).length;
     html += `<div class="rc-upload-block">
       <div class="rc-upload-header ${hdrClass}" onclick="toggleRCBlock(${ri})">
         <span class="rc-upload-title">Upload #${state.changeHistory.length - ri} &nbsp;·&nbsp; ${record.source}</span>
         <span class="rc-upload-date">${record.date}</span>
         <span class="rc-upload-source">${totalEvents} change${totalEvents!==1?'s':''}</span>
+        ${isMBUpload && almaCount > 0 ? `<button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--teal);border-color:var(--teal);flex-shrink:0" onclick="event.stopPropagation();generateAlmaReportFromRecord(${record.id})" title="Export Alma bulk update for this upload (${almaCount} changes)">📋 Alma Export</button>` : ''}
         ${hasSnapshot ? `<button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--yellow);border-color:var(--yellow);flex-shrink:0" onclick="event.stopPropagation();undoUpload(${record.id})">↩ Undo</button>` : ''}
         <span class="rc-upload-chevron">▼</span>
       </div>
@@ -2856,7 +2949,7 @@ function showDetail(barcode) {
     <div class="detail-section-label" style="margin-top:20px">⚙ Manual Override</div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:12px;">
       <div style="color:var(--text2);font-family:'DM Mono',monospace;font-size:11px;margin-bottom:10px;line-height:1.6">
-        Use these controls if the automatic categorization is incorrect. Moving a hotspot manually will pause auto-categorization for it and log the change for AI analysis.
+        Use these controls if the automatic categorization is incorrect. Changes are logged and analyzed by AI to improve the system.
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
@@ -2873,6 +2966,26 @@ function showDetail(barcode) {
             <option value="">— Select list to remove from —</option>
             ${currentTabRemoveOpts}
           </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.1em">Override Sub Status</div>
+          <select id="manual-substatus-${h.barcode}" style="width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:6px;padding:7px 10px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;outline:none">
+            <option value="">— Keep current (${h.sub_status}) —</option>
+            <option value="Active" ${h.sub_status==='Active'?'selected':''}>Active</option>
+            <option value="Deactivated" ${h.sub_status==='Deactivated'?'selected':''}>Deactivated</option>
+            <option value="Blocked" ${h.sub_status==='Blocked'?'selected':''}>Blocked</option>
+            <option value="Expired" ${h.sub_status==='Expired'?'selected':''}>Expired</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.1em">Override Active/Deactivated</div>
+          <div style="display:flex;gap:6px;margin-top:2px">
+            <button onclick="applyManualSubStatus('${h.barcode}','Active')" style="flex:1;padding:7px 6px;background:var(--green-bg);border:1px solid var(--green);border-radius:6px;color:var(--green);font-size:10px;font-family:'Syne',sans-serif;font-weight:700;cursor:pointer">✓ Set Active</button>
+            <button onclick="applyManualSubStatus('${h.barcode}','Deactivated')" style="flex:1;padding:7px 6px;background:var(--red-bg);border:1px solid var(--red);border-radius:6px;color:var(--red);font-size:10px;font-family:'Syne',sans-serif;font-weight:700;cursor:pointer">⊘ Set Deactivated</button>
+          </div>
         </div>
       </div>
 
@@ -3049,6 +3162,43 @@ In 2-3 sentences, explain: (1) why the auto-categorization was likely wrong, (2)
 
   notify(`${changeDesc}`, 'success');
   // Refresh the detail view
+  showDetail(barcode);
+}
+
+// Apply a manual sub_status override (Active / Deactivated / Blocked / Expired)
+async function applyManualSubStatus(barcode, newStatus) {
+  const h = state.hotspots.find(x => x.barcode === barcode);
+  if (!h) return;
+  const reasonEl = document.getElementById('manual-reason-' + barcode);
+  const reason   = reasonEl ? reasonEl.value.trim() : '';
+  const oldStatus = h.sub_status;
+  if (oldStatus === newStatus) { notify('Sub status is already ' + newStatus, 'info'); return; }
+
+  takeSnapshot();
+  h.sub_status = newStatus;
+  if (newStatus === 'Active') {
+    h.mb_deactivated = false;
+  } else if (newStatus === 'Deactivated') {
+    h.mb_deactivated = true;
+  }
+  h.manually_placed  = true;
+  h.manual_reason    = reason || ('Manually set sub status: ' + oldStatus + ' → ' + newStatus);
+  h.manual_timestamp = new Date().toISOString();
+  recalcTabs(h);
+
+  const changeDesc = 'Sub status manually set: ' + oldStatus + ' → ' + newStatus;
+  recordUpload('Manual Override', [{
+    type: 'manual_override',
+    copy_num: h.copy_num,
+    barcode: h.barcode || '',
+    device_type: h.device_type,
+    library: h.library,
+    desc: changeDesc,
+    detail: reason || ('Was: ' + oldStatus + ' → Now: ' + newStatus),
+  }]);
+  saveState();
+  updateBadges();
+  notify(changeDesc, 'success');
   showDetail(barcode);
 }
 
@@ -3307,6 +3457,10 @@ function renderHistory() {
     // Find matching change record to check for snapshot
     const chRec = state.changeHistory.find(r => r.id === h.id);
     const hasSnap = chRec && !!chRec.snapshot;
+    const isMBUpload = h.source.toLowerCase().includes('mobile beacon') || h.source.toLowerCase().includes('mb ');
+    const almaTypes = new Set(['renewed', 'deactivated_mb', 'restored']);
+    const almaCount = chRec ? chRec.events.filter(e => almaTypes.has(e.type)).length : 0;
+
     html += `<div class="uh-item">
       <div class="uh-item-header">
         <div class="uh-avatar" style="background:${color}">${initial}</div>
@@ -3317,8 +3471,10 @@ function renderHistory() {
         <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;justify-content:center;padding:0 12px">${badges}</div>
         <div class="uh-count">${h.totalEvents} change${h.totalEvents!==1?'s':''}</div>
         <div class="uh-date">${h.date}</div>
-        ${hasSnap ? `<button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--yellow);border-color:var(--yellow);flex-shrink:0;margin-left:8px"
-          onclick="undoUpload(${h.id})">↩ Undo</button>` : ''}
+        ${isMBUpload && almaCount > 0 ? `<button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--teal);border-color:var(--teal);flex-shrink:0;margin-left:8px"
+          onclick="generateAlmaReportFromRecord(${h.id})" title="${almaCount} changes available">📋 Alma</button>` : ''}
+        <button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--yellow);border-color:var(--yellow);flex-shrink:0;margin-left:4px;${!hasSnap?'opacity:0.45;':''}}"
+          onclick="undoUpload(${h.id})" title="${hasSnap ? 'Undo this upload' : 'Snapshot not available — undo may be limited'}">↩ Undo</button>
       </div>
     </div>`;
   });
@@ -3385,21 +3541,26 @@ const SUPABASE_KEY = 'sb_publishable_qn2lu5reQeF2xl80QPeGBg_SjSTI2Us';
 const STORAGE_KEY  = 'slo_hotspot_db_v1'; // kept as localStorage fallback key
 
 async function saveState() {
-  // Save FULL state (including hotspot snapshots) to localStorage for undo support
+  // Save FULL state (including hotspot snapshots) to localStorage for undo support.
+  // Snapshots MUST be saved here so that undo works after a page refresh.
   const toSave = {
     hotspots:        state.hotspots,
     profiles:        state.profiles,
     activeProfileId: state.activeProfileId,
-    changeHistory:   state.changeHistory,
+    changeHistory:   state.changeHistory,   // includes snapshots for undo
     uploadHistory:   state.uploadHistory,
     lastUpdated:     state.lastUpdated,
   };
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)); } catch(e) {
     console.warn('localStorage save failed (quota?):', e.message);
+    // If quota exceeded, try saving without snapshots as fallback
+    try {
+      const toSaveNoSnap = { ...toSave, changeHistory: toSave.changeHistory.map(r => { const {snapshot,...rest}=r; return rest; }) };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSaveNoSnap));
+    } catch(e2) { console.warn('localStorage fallback also failed:', e2.message); }
   }
 
-  // For Supabase: save profiles + stripped history (no hotspot data — it's always re-derived from baseline)
-  // Strip snapshots from changeHistory to keep payload small
+  // For Supabase: save profiles + stripped history (no hotspot data or snapshots — keep payload small)
   const changeHistoryCloud = state.changeHistory.map(r => {
     const { snapshot, ...rest } = r;
     return rest;
@@ -3501,6 +3662,7 @@ function resetToBaseline() {
   state.uploadHistory = [];
   state.lastUpdated   = new Date().toLocaleDateString();
   state.hotspots.forEach(h => recalcTabs(h));
+  // Clear both localStorage and Supabase
   localStorage.removeItem(STORAGE_KEY);
   saveState();
   updateBadges();
@@ -3509,63 +3671,78 @@ function resetToBaseline() {
 }
 
 // ============================================================
-// INIT — always start from baseline HOTSPOTS inventory
+// INIT — restore from localStorage if available, else start from baseline
 // ============================================================
 // Show a loading indicator while we initialize
 document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="position:absolute;bottom:24px;left:0;right:0;text-align:center;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">⟳ Loading…</div>`;
 
 (async () => {
-  // Reset to baseline: always use the embedded HOTSPOTS data as the starting inventory.
-  // We do NOT load from Supabase for the hotspot inventory — it represents the "original"
-  // state before any uploads. Profiles, upload history, and change logs ARE persisted.
-  
-  // Load only profiles, change history, and upload history from storage
-  let profilesLoaded = false;
+  // Step 1: Try to restore full state from localStorage (preserves undo history across refreshes)
+  let restoredFromLocal = false;
   try {
-    const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main&select=data', {
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
-    });
-    if (res.ok) {
-      const rows = await res.json();
-      if (rows && rows.length && rows[0].data) {
-        const saved = rows[0].data;
-        // Only restore profiles and session metadata — NOT hotspot data
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (saved.hotspots && saved.hotspots.length) {
+        state.hotspots        = saved.hotspots;
         state.profiles        = saved.profiles        || [];
         state.activeProfileId = saved.activeProfileId || null;
-        // Do NOT restore changeHistory/uploadHistory — they reference old data states
-        // that no longer apply to the freshly reset inventory
-        profilesLoaded = true;
-        console.log('✓ Profiles loaded from Supabase');
+        state.changeHistory   = saved.changeHistory   || [];
+        state.uploadHistory   = saved.uploadHistory   || [];
+        state.lastUpdated     = saved.lastUpdated      || new Date().toLocaleDateString();
+        // Re-run recalcTabs on all hotspots to ensure derived fields are current
+        state.hotspots.forEach(h => { if (!h.manually_placed) recalcTabs(h); });
+        restoredFromLocal = true;
+        console.log('✓ Restored full state from localStorage (' + saved.hotspots.length + ' devices, ' + state.changeHistory.length + ' uploads in history)');
       }
     }
   } catch(e) {
-    console.warn('Supabase load failed, trying localStorage:', e.message);
+    console.warn('localStorage restore failed:', e.message);
   }
 
-  if (!profilesLoaded) {
-    // Try localStorage fallback for profiles only
+  // Step 2: If no localStorage, try Supabase for profiles only, then use baseline hotspots
+  if (!restoredFromLocal) {
+    let profilesLoaded = false;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        state.profiles        = saved.profiles        || [];
-        state.activeProfileId = saved.activeProfileId || null;
-        console.log('✓ Profiles loaded from localStorage');
+      const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main&select=data', {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (rows && rows.length && rows[0].data) {
+          const saved = rows[0].data;
+          state.profiles        = saved.profiles        || [];
+          state.activeProfileId = saved.activeProfileId || null;
+          profilesLoaded = true;
+          console.log('✓ Profiles loaded from Supabase (fresh baseline)');
+        }
       }
-    } catch(e) {}
+    } catch(e) {
+      console.warn('Supabase load failed, trying localStorage for profiles:', e.message);
+    }
+
+    if (!profilesLoaded) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          state.profiles        = saved.profiles        || [];
+          state.activeProfileId = saved.activeProfileId || null;
+        }
+      } catch(e) {}
+    }
+
+    // Start with baseline HOTSPOTS
+    state.hotspots = JSON.parse(JSON.stringify(HOTSPOTS));
+    state.hotspots.forEach(h => recalcTabs(h));
+    state.changeHistory = [];
+    state.uploadHistory = [];
+    state.lastUpdated   = new Date().toLocaleDateString();
+    console.log('✓ Starting from baseline HOTSPOTS inventory');
+    saveState();
   }
 
-  // Always start with the baseline HOTSPOTS — recalculate all tabs from scratch
-  state.hotspots = JSON.parse(JSON.stringify(HOTSPOTS));
-  state.hotspots.forEach(h => recalcTabs(h));
-  state.changeHistory = [];
-  state.uploadHistory = [];
-  state.lastUpdated   = new Date().toLocaleDateString();
-  state.dataLoaded    = true;
-
-  // Push fresh baseline to Supabase so the slate is clean
-  // (only profiles persisted, inventory is always the embedded baseline)
-  saveState();
+  state.dataLoaded = true;
 
   // Remove loading indicator
   const el = document.getElementById('db-loading');
