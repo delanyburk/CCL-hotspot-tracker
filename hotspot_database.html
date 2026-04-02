@@ -304,6 +304,7 @@
   }
   .rc-item:last-child { border-bottom: none; }
   .rc-item:hover { background: rgba(255,255,255,0.02); }
+  .rc-item.clickable:hover { background: rgba(255,255,255,0.05); cursor: pointer; }
   .rc-item-copy { font-weight: 700; font-family: 'Syne', sans-serif; font-size: 13px; color: var(--text); }
   .rc-item-type { }
   .rc-item-desc { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); }
@@ -382,7 +383,7 @@
     font-size: 12px; transition: background 0.1s; cursor: default;
   }
   .attn-item:last-child { border-bottom: none; }
-  .attn-item:hover { background: rgba(255,255,255,0.02); }
+  .attn-item:hover { background: rgba(255,255,255,0.05); cursor: pointer; }
   .attn-item .ai-copy { font-weight: 700; font-family: 'Syne', sans-serif; color: var(--text); font-size: 13px; }
   .attn-item .ai-type { }
   .attn-item .ai-tags { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -850,49 +851,133 @@ function exportCSV(data, filename) {
 // ============================================================
 function recalcTabs(h) {
   const tabs = new Set();
-  const proc = (h.process_type || '').toLowerCase().trim();
-  const stat = h.lis_status || '';
-  const sub = h.sub_status || '';
-  const isDeactBlocked = sub === 'Deactivated' || sub === 'Blocked';
-  const isExpired = sub === 'Expired';
-  const isInactive = isDeactBlocked || isExpired;
+  const proc  = (h.process_type || '').toLowerCase().trim();
+  const stat  = h.lis_status || '';
+  const sub   = h.sub_status || '';
 
-  let isOverdue = false;
-  let daysOverdue = 0;
-  if (h.due_date) {
-    const dd = new Date(h.due_date);
-    if (dd < TODAY && proc === 'loan') {
-      isOverdue = true;
-      daysOverdue = Math.round((TODAY - dd) / 86400000);
-    }
+  const isDeactBlocked = sub === 'Deactivated' || sub === 'Blocked';
+  const isExpired      = sub === 'Expired';
+  const isInactive     = isDeactBlocked || isExpired;
+  const isInPlace      = stat === 'Item in place';
+  const isOnLoan       = proc === 'loan';
+  const isLostProc     = ['lost','missing','lost and paid','claimed returned'].includes(proc);
+  const isBlankProc    = proc === '';
+
+  // Overdue calculation (loans only)
+  let isOverdue = false, daysOverdue = 0;
+  if (h.due_date && isOnLoan) {
+    try {
+      const dd = new Date(h.due_date);
+      if (!isNaN(dd) && dd < TODAY) {
+        isOverdue   = true;
+        daysOverdue = Math.round((TODAY - dd) / 86400000);
+      }
+    } catch {}
   }
-  h.is_overdue = isOverdue;
+  h.is_overdue   = isOverdue;
   h.days_overdue = daysOverdue;
 
-  // ARCHIVED: deactivated/blocked in description
-  //           OR expired AND (90+ days overdue OR blank process / item in place)
-  const isArchived = isDeactBlocked ||
-    (isExpired && (daysOverdue >= 90 || proc === '' || stat === 'Item in place'));
-  if (isArchived) tabs.add('archived');
-  if (['lost','missing','lost and paid','claimed returned'].includes(proc)) tabs.add('lost_missing');
-  if (isOverdue) tabs.add('overdue');
-  if (proc === 'loan' && !isOverdue) tabs.add('active_loans');
-  if ((proc === '' || stat === 'Item in place') && !['loan','missing','lost','lost and paid','claimed returned'].includes(proc)) tabs.add('in_stock');
-
-  if (!tabs.has('archived')) {
-    if ((isOverdue && daysOverdue >= 90) || ['lost','missing','lost and paid'].includes(proc)) tabs.add('to_deactivate');
-  }
-  // TO BE REACTIVATED: inactive device physically back at the library
-  if (isInactive && (proc === '' || stat === 'Item in place')) {
-    tabs.add('to_be_reactivated');
-  }
-  if (h.exp_date) {
-    const exp = new Date(h.exp_date);
-    const daysToExp = Math.round((exp - TODAY) / 86400000);
-    if (daysToExp <= 180 && ['loan',''].includes(proc)) {
-      if (!tabs.has('overdue') && !tabs.has('lost_missing') && (!tabs.has('archived') || tabs.has('to_be_reactivated'))) tabs.add('upcoming_renewals');
+  // ── Rule 5: 90+ days overdue → auto-set process type to Lost ───────────────
+  if (isOverdue && daysOverdue >= 90) {
+    h.process_type = 'Lost';
+    isOverdue      = false;
+    daysOverdue    = 0;
+    h.is_overdue   = false;
+    h.days_overdue = 0;
+    // Re-derive flags with new proc
+    tabs.add('lost_missing');
+    // Rule 7/8: if also deact/blocked/expired → archived only
+    if (isInactive) {
+      tabs.clear();
+      tabs.add('archived');
+    } else {
+      tabs.add('to_deactivate');
     }
+    h.tabs = Array.from(tabs);
+    return h;
   }
+
+  // ── Rule 1/9/11: In place → In Stock regardless of sub status ──────────────
+  if (isInPlace) {
+    tabs.add('in_stock');
+    // Inactive but physically returned → To Reactivate
+    if (isInactive) tabs.add('to_be_reactivated');
+    // Upcoming renewals: in_stock + not to_reactivate + exp within 180d
+    if (h.exp_date && !tabs.has('to_be_reactivated')) {
+      try {
+        if (Math.round((new Date(h.exp_date) - TODAY) / 86400000) <= 180)
+          tabs.add('upcoming_renewals');
+      } catch {}
+    }
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rule 3 (updated): Active loan + deact/blocked ──────────────────────────
+  // Keep in active_loans AND archived AND to_reactivate AND flag for attention
+  if (isOnLoan && !isOverdue && isDeactBlocked) {
+    tabs.add('active_loans');
+    tabs.add('archived');
+    tabs.add('to_be_reactivated');
+    h.attention_critical = true;
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rule 2: Active loan, not deact/blocked ──────────────────────────────────
+  if (isOnLoan && !isOverdue) {
+    tabs.add('active_loans');
+    // Expired sub on active loan → To Reactivate
+    if (isExpired) tabs.add('to_be_reactivated');
+    // Upcoming renewals: active_loans + not to_reactivate + exp within 180d
+    if (h.exp_date && !tabs.has('to_be_reactivated')) {
+      try {
+        if (Math.round((new Date(h.exp_date) - TODAY) / 86400000) <= 180)
+          tabs.add('upcoming_renewals');
+      } catch {}
+    }
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rule 6b: Overdue loan + inactive → Archived only ───────────────────────
+  if (isOnLoan && isOverdue && isInactive) {
+    tabs.add('archived');
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rule 4: Overdue loan, not inactive (<90d already handled above) ─────────
+  if (isOnLoan && isOverdue) {
+    tabs.add('overdue');
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rules 7/8: Lost/Missing process type ───────────────────────────────────
+  if (isLostProc) {
+    if (isInactive) {
+      // Deact/blocked/expired + lost → Archived only
+      tabs.add('archived');
+    } else {
+      // Active + lost → Lost/Missing + To Deactivate
+      tabs.add('lost_missing');
+      tabs.add('to_deactivate');
+    }
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
+  // ── Rules 9/10/11/12: Blank process, not in place ───────────────────────────
+  if (isBlankProc) {
+    if (isInactive) {
+      tabs.add('archived');
+    }
+    // Active sub + blank + not in place: no tab (limbo — will be caught by attention panel)
+    h.tabs = Array.from(tabs);
+    return h;
+  }
+
   h.tabs = Array.from(tabs);
   return h;
 }
@@ -1000,8 +1085,7 @@ function buildTable(data, tabId) {
   html += `</tr></thead><tbody>`;
 
   data.forEach(h => {
-    const isTotal = tabId === 'total';
-    html += `<tr class="${isTotal ? 'clickable' : ''}" ${isTotal ? `onclick="showDetail('${h.barcode}')"` : ''}>`; 
+    html += `<tr class="clickable" onclick="showDetail('${h.barcode}')">`; 
     cols.forEach(([col]) => {
       if (col === 'copy_num') html += `<td class="td-main">c. ${h.copy_num ?? '?'}</td>`;
       else if (col === 'device_type') html += `<td><span class="badge ${h.device_type==='T10'?'badge-blue':'badge-purple'}">${h.device_type}</span>${h.program ? ' <span class="badge badge-yellow">'+h.program+'</span>' : ''}</td>`;
@@ -1075,6 +1159,12 @@ function buildAttentionItems() {
     const sub = h.sub_status || '';
     const daysOD = h.days_overdue || 0;
     const triggers = [];
+
+    // CRITICAL: Active loan but deactivated/blocked (rule 3 updated) — needs immediate action
+    if (h.attention_critical && tabs.includes('active_loans') && tabs.includes('archived')) {
+      triggers.push({ tier: 'critical', tag: 'DEACTIVATED — STILL ON LOAN', tagClass: 'atag-red',
+        detail: 'Service cut — device is out to a patron' });
+    }
 
     // CRITICAL: Expiring within 30 days (on renewal list only — active loan or in-stock)
     if (exp && tabs.includes('upcoming_renewals')) {
@@ -1170,7 +1260,7 @@ function renderAttentionPanel() {
       const detail = triggers.map(t => t.detail).filter((v,i,a)=>a.indexOf(v)===i).join(' · ');
       const expStr = h.exp_date ? `exp ${formatDate(h.exp_date)}` : '';
       const typeClass = h.device_type === 'T10' ? 'badge-blue' : 'badge-purple';
-      return `<div class="attn-item">
+      return `<div class="attn-item" style="cursor:pointer" onclick="showDetail('${h.barcode}')">
         <span class="ai-copy">c. ${h.copy_num ?? '?'}</span>
         <span class="ai-type"><span class="badge ${typeClass}">${h.device_type}</span>${h.program ? ' <span class="badge badge-yellow" style="font-size:9px">' + h.program + '</span>' : ''}</span>
         <span class="ai-tags">${tags}</span>
@@ -1579,14 +1669,18 @@ function generateAlmaReport() {
       } catch { return dateStr; }
     }
 
-    // Build description: keep "c. X" prefix, update/add exp or (Deactivated)
+    // Build description: keep "c. X" prefix, update exp date and status suffix
     function buildDesc(h) {
       const base = h.description || '';
-      // Strip existing exp date and deactivated suffix, keep "c. X" prefix
       const prefix = base.match(/^[Cc]\.?\s*\d+/)?.[0] || ('c. ' + h.copy_num);
-      if (h.mb_deactivated || h.sub_status === 'Deactivated') {
+      const isDeact = h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked';
+      const isExp   = h.sub_status === 'Expired';
+      if (isDeact) {
         const expPart = h.exp_date ? ' exp ' + fmtExp(h.exp_date) : '';
         return prefix + expPart + ' (Deactivated)';
+      }
+      if (isExp) {
+        return prefix + ' exp ' + fmtExp(h.exp_date) + ' (Expired)';
       }
       return prefix + ' exp ' + fmtExp(h.exp_date);
     }
@@ -1595,7 +1689,8 @@ function generateAlmaReport() {
       barcode:         h.barcode || '',
       internal_note_1: h.imei   || '',
       internal_note_2: h.phone  || '',
-      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated') ? 'Deactivated' : fmtExp(h.exp_date),
+      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked') ? 'Deactivated' :
+                       h.sub_status === 'Expired' ? fmtExp(h.exp_date) + ' (Expired)' : fmtExp(h.exp_date),
       description:     buildDesc(h),
     }));
 
@@ -2522,7 +2617,8 @@ function renderChanges() {
 
       items.forEach(ev => {
         const typeClass = ev.device_type === 'T10' ? 'badge-blue' : ev.device_type === 'T9' ? 'badge-purple' : 'badge-gray';
-        html += `<div class="rc-item">
+        const rcBarcode = ev.barcode || '';
+        html += `<div class="rc-item clickable" ${rcBarcode ? `onclick="showDetail('${ev.barcode}')"` : ''} style="${rcBarcode ? 'cursor:pointer' : ''}">
           <span class="rc-item-copy">${ev.copy_num ? 'c. ' + ev.copy_num : '—'}</span>
           <span class="rc-item-type">${ev.device_type ? '<span class="badge ' + typeClass + '">' + ev.device_type + '</span>' : ''}</span>
           <span class="rc-item-barcode" title="${ev.barcode || ''}">${ev.barcode ? ev.barcode.slice(-8) : '—'}</span>
@@ -3022,10 +3118,17 @@ async function saveState() {
     lastUpdated:     state.lastUpdated,
   };
 
-  // Always write to localStorage as an instant local backup
+  // Always write full state (with snapshots) to localStorage for undo support
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)); } catch(e) {}
 
-  // Write to Supabase (upsert the single 'main' row)
+  // For Supabase: strip snapshots from changeHistory to keep payload small
+  // Snapshots average ~180KB each and will exceed Supabase's 1MB row limit after ~5 uploads
+  const changeHistoryCloud = state.changeHistory.map(r => {
+    const { snapshot, ...rest } = r;
+    return rest;
+  });
+  const toSaveCloud = { ...toSave, changeHistory: changeHistoryCloud };
+
   try {
     const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main', {
       method: 'PATCH',
@@ -3035,7 +3138,7 @@ async function saveState() {
         'Authorization': 'Bearer ' + SUPABASE_KEY,
         'Prefer': 'return=minimal',
       },
-      body: JSON.stringify({ data: toSave, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ data: toSaveCloud, updated_at: new Date().toISOString() }),
     });
     if (!res.ok) {
       const err = await res.text();
