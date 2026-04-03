@@ -2374,18 +2374,31 @@ function handleMBActiveFile(file, resultTarget) {
         if (changed) { recalcTabs(h); updated++; }
 
       } else {
-        // Device is NOT on MB active list — mark as deactivated
-        // Only flag if not already deactivated/blocked
-        if (h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
-          changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
-          h.sub_status = 'Deactivated';
-          h.mb_deactivated = true;
+        // Device is NOT on MB active list.
+        // Rule: Only mark as "Deactivated" if it was explicitly deactivated via a MB Deactivation
+        // report (mb_deactivated flag already set). Otherwise mark as "Expired" — being absent
+        // from the active list may just mean the subscription lapsed, not that it was intentionally
+        // deactivated. Exception: already-Blocked devices stay Blocked.
+        if (h.sub_status === 'Deactivated' || h.sub_status === 'Blocked') {
+          // Already inactive — nothing to change, don't re-flag
+        } else if (h.sub_status === 'Expired') {
+          // Already expired — no change needed
+        } else {
+          // Was Active (or Unknown) and is now absent from active list → Expired
+          const newStatus = h.mb_deactivated ? 'Deactivated' : 'Expired';
+          changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">${newStatus} (not on MB active list)</span>`);
+          h.sub_status = newStatus;
+          if (newStatus === 'Deactivated') h.mb_deactivated = true;
           h.last_mb_updated = true; // flag for Alma export
           recalcTabs(h);
           deactivated++;
         }
       }
     });
+
+    // Count expired vs deactivated for summary
+    const expiredCount  = state.hotspots.filter(h => h.imei && !activeIMEIs.has(String(h.imei).trim()) && h.sub_status === 'Expired' && !h.mb_deactivated).length;
+    const deactCount    = state.hotspots.filter(h => h.imei && !activeIMEIs.has(String(h.imei).trim()) && (h.sub_status === 'Deactivated' || h.sub_status === 'Blocked')).length;
 
     state.changeLog = changes;
     state.lastUpdated = new Date().toLocaleDateString();
@@ -2394,12 +2407,14 @@ function handleMBActiveFile(file, resultTarget) {
     updateBadges();
 
     const summary = `✅ MB Active List processed — ${activeIMEIs.size} active IMEIs found.<br>
-      <strong>${deactivated}</strong> hotspots marked Deactivated (not on MB list) &nbsp;·&nbsp;
+      <strong>${deactivated}</strong> hotspots removed from active list
+      (${expiredCount} marked <span style="color:var(--yellow)">Expired</span>,
+       ${deactCount} already/explicitly <span style="color:var(--red)">Deactivated/Blocked</span>) &nbsp;·&nbsp;
       <strong>${updated}</strong> records updated (exp date / phone) &nbsp;·&nbsp;
       <strong>${skipped}</strong> skipped (no IMEI on record)`;
     showResult(mbResultId, summary, deactivated > 0 ? 'info' : 'success');
     saveState();
-    notify(`MB reconciliation complete: ${deactivated} deactivated, ${updated} updated`, deactivated > 0 ? 'info' : 'success');
+    notify(`MB reconciliation: ${deactivated} inactive (${expiredCount} expired), ${updated} updated`, deactivated > 0 ? 'info' : 'success');
   });
 }
 
@@ -2569,8 +2584,14 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
       const m = clean.match(/c\.(\d+)/);
       const cn = m ? parseInt(m[1]) : null;
       const h = state.hotspots.find(x => x.copy_num === cn);
-      events.push({ type: 'deactivated_mb', copy_num: cn, barcode: h ? (h.barcode||'') : '', device_type: h?h.device_type:'', library: h?h.library:'',
-        desc: 'Deactivated — not on MB active list', detail: '' });
+      const isExpired = clean.includes('Expired');
+      events.push({
+        type: isExpired ? 'status_change' : 'deactivated_mb',
+        copy_num: cn, barcode: h ? (h.barcode||'') : '',
+        device_type: h?h.device_type:'', library: h?h.library:'',
+        desc: isExpired ? 'Subscription expired (not on MB active list)' : 'Deactivated — not on MB active list',
+        detail: '',
+      });
     } else if (clean.includes('exp updated')) {
       const m = clean.match(/c\.(\d+).+exp updated:\s*(.+?)\s*→\s*(.+)/);
       if (m) {
@@ -2686,7 +2707,7 @@ function renderChanges() {
     { key: 'returned',       label: 'Returned to Library',   cls: 'rcs-returned' },
     { key: 'renewed',        label: 'Renewed / Exp Updated', cls: 'rcs-renewed' },
     { key: 'archived',       label: 'Moved to Archive',      cls: 'rcs-archived' },
-    { key: 'deactivated_mb', label: 'Deactivated by MB Recon', cls: 'rcs-deactivated' },
+    { key: 'deactivated_mb', label: 'Deactivated by MB',        cls: 'rcs-deactivated' },
     { key: 'restored',       label: 'Restored / Reactivated (MB)', cls: 'rcs-restored' },
     { key: 'status_change',  label: 'Status Changes',        cls: 'rcs-status' },
     { key: 'sent_for_renewal', label: 'Sent for Renewal',       cls: 'rcs-teal' },
