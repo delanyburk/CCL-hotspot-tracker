@@ -2856,7 +2856,12 @@ function showDetail(barcode) {
           value="${h.imei || ''}"
           maxlength="20"
           style="flex:1;font-size:12px;padding:7px 10px">
-        <button class="override-btn" id="override-imei-btn">Save IMEI</button>
+        <button class="override-btn" onclick="
+          var inp = document.getElementById('override-imei-input');
+          var v = inp ? inp.value.trim().replace(/\D/g,'') : '';
+          if (!v || v.length < 14 || v.length > 16) { notify('IMEI must be 14–16 digits', 'error'); return; }
+          updateHotspotIMEI('${h.barcode}', v);
+        ">Save IMEI</button>
       </div>
 
       <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin:10px 0 6px">Move to / Remove from List</div>
@@ -2867,7 +2872,13 @@ function showDetail(barcode) {
           ${removableTabs.length ? '<option disabled>──────────</option>' : ''}
           ${removeOptions}
         </select>
-        <button class="override-btn" id="override-apply-btn">Apply</button>
+        <button class="override-btn" onclick="
+          var sel = document.getElementById('override-tab-select');
+          var v = sel ? sel.value : '';
+          if (!v) { notify('Select a list action first', 'error'); return; }
+          var isRemove = v.startsWith('remove:');
+          applyManualOverride('${h.barcode}', isRemove ? 'remove' : 'add', isRemove ? v.slice(7) : v);
+        ">Apply</button>
         <button class="override-btn" onclick="applyManualOverride('${h.barcode}','recalc',null)" title="Reset to computed state">↺ Reset</button>
       </div>
       <div class="override-note">List overrides are analyzed by AI to improve future categorization.</div>
@@ -2878,34 +2889,6 @@ function showDetail(barcode) {
       ` : ''}
     </div>
   `;
-
-  // Fix the apply button to read value correctly from select
-  setTimeout(() => {
-    // Wire list override apply button
-    const sel2 = document.getElementById('override-tab-select');
-    const applyBtn = document.getElementById('override-apply-btn');
-    if (applyBtn && sel2) {
-      applyBtn.onclick = () => {
-        const v = sel2.value;
-        if (!v) { notify('Select a list action first', 'error'); return; }
-        const isRemove = v.startsWith('remove:');
-        applyManualOverride('${h.barcode}', isRemove ? 'remove' : 'add', isRemove ? v.slice(7) : v);
-      };
-    }
-    // Wire IMEI save button
-    const imeiBtn = document.getElementById('override-imei-btn');
-    const imeiInput = document.getElementById('override-imei-input');
-    if (imeiBtn && imeiInput) {
-      imeiBtn.onclick = () => {
-        const newIMEI = imeiInput.value.trim().replace(/\D/g, '');
-        if (!newIMEI || newIMEI.length < 14 || newIMEI.length > 16) {
-          notify('IMEI must be 14–16 digits', 'error');
-          return;
-        }
-        updateHotspotIMEI('${h.barcode}', newIMEI);
-      };
-    }
-  }, 0);
 
   // Render recent overrides for this device
   const rulesDiv = document.getElementById('override-rules-list');
