@@ -2848,6 +2848,18 @@ function showDetail(barcode) {
 
     <div class="override-section">
       <div class="override-section-label">⚙ Manual Override</div>
+
+      <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin-bottom:6px">Edit IMEI</div>
+      <div class="override-row">
+        <input class="pm-input" id="override-imei-input" type="text"
+          placeholder="Enter correct IMEI number"
+          value="${h.imei || ''}"
+          maxlength="20"
+          style="flex:1;font-size:12px;padding:7px 10px">
+        <button class="override-btn" id="override-imei-btn">Save IMEI</button>
+      </div>
+
+      <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin:10px 0 6px">Move to / Remove from List</div>
       <div class="override-row">
         <select class="override-select" id="override-tab-select">
           <option value="">— Select action —</option>
@@ -2858,10 +2870,10 @@ function showDetail(barcode) {
         <button class="override-btn" id="override-apply-btn">Apply</button>
         <button class="override-btn" onclick="applyManualOverride('${h.barcode}','recalc',null)" title="Reset to computed state">↺ Reset</button>
       </div>
-      <div class="override-note">Overrides are analyzed by AI to improve future categorization. Use sparingly to correct mistakes.</div>
+      <div class="override-note">List overrides are analyzed by AI to improve future categorization.</div>
       <div class="override-ai-result" id="override-ai-result" style="display:none"></div>
       ${state.overrideRules && state.overrideRules.length ? `
-        <div class="override-section-label" style="margin-top:12px">Recent Overrides</div>
+        <div class="override-section-label" style="margin-top:12px">Recent List Overrides</div>
         <div class="override-rule-list" id="override-rules-list"></div>
       ` : ''}
     </div>
@@ -2869,6 +2881,7 @@ function showDetail(barcode) {
 
   // Fix the apply button to read value correctly from select
   setTimeout(() => {
+    // Wire list override apply button
     const sel2 = document.getElementById('override-tab-select');
     const applyBtn = document.getElementById('override-apply-btn');
     if (applyBtn && sel2) {
@@ -2877,6 +2890,19 @@ function showDetail(barcode) {
         if (!v) { notify('Select a list action first', 'error'); return; }
         const isRemove = v.startsWith('remove:');
         applyManualOverride('${h.barcode}', isRemove ? 'remove' : 'add', isRemove ? v.slice(7) : v);
+      };
+    }
+    // Wire IMEI save button
+    const imeiBtn = document.getElementById('override-imei-btn');
+    const imeiInput = document.getElementById('override-imei-input');
+    if (imeiBtn && imeiInput) {
+      imeiBtn.onclick = () => {
+        const newIMEI = imeiInput.value.trim().replace(/\D/g, '');
+        if (!newIMEI || newIMEI.length < 14 || newIMEI.length > 16) {
+          notify('IMEI must be 14–16 digits', 'error');
+          return;
+        }
+        updateHotspotIMEI('${h.barcode}', newIMEI);
       };
     }
   }, 0);
@@ -2909,6 +2935,37 @@ const ALL_TABS = [
   { id: 'to_be_reactivated', label: 'To Reactivate' },
   { id: 'upcoming_renewals', label: 'Upcoming Renewals' },
 ];
+
+function updateHotspotIMEI(barcode, newIMEI) {
+  const h = state.hotspots.find(x => x.barcode === barcode);
+  if (!h) return;
+
+  const oldIMEI = h.imei || '';
+  if (newIMEI === oldIMEI) {
+    notify('IMEI unchanged', 'info');
+    return;
+  }
+
+  // Check for duplicate IMEI
+  const duplicate = state.hotspots.find(x => x.barcode !== barcode && x.imei === newIMEI);
+  if (duplicate) {
+    if (!confirm(`⚠️ IMEI ${newIMEI} is already assigned to c.${duplicate.copy_num} (${duplicate.barcode}).\n\nAre you sure you want to assign it to c.${h.copy_num} as well?`)) return;
+  }
+
+  h.imei = newIMEI;
+  h.imei_verified = true;
+
+  saveState();
+  updateBadges();
+  notify(`✓ IMEI updated for c.${h.copy_num}: ${oldIMEI || '(none)'} → ${newIMEI}`, 'success');
+
+  // Update the input field to reflect the saved value and show verified
+  const imeiInput = document.getElementById('override-imei-input');
+  if (imeiInput) imeiInput.value = newIMEI;
+
+  // Refresh the detail modal to show the updated IMEI in Device Details
+  showDetail(barcode);
+}
 
 function applyManualOverride(barcode, action, targetTab) {
   const h = state.hotspots.find(x => x.barcode === barcode);
