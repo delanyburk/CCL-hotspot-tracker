@@ -2529,6 +2529,50 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
 function checkAutomaticChanges() {
   const autoEvents = [];
 
+  // ── Backfill: find hotspots already in auto-lost/expired state with no history entry ──
+  // Catches devices that were converted before this tracking was set up.
+  const allLoggedBarcodes = new Set(
+    state.changeHistory
+      .flatMap(r => (r.events || []).map(e => e.barcode))
+  );
+
+  state.hotspots.forEach(h => {
+    const tabs = h.tabs || [];
+    const proc = (h.process_type || '').toLowerCase();
+
+    // Already lost/missing with no prior log entry — backfill it
+    if (tabs.includes('lost_missing') && tabs.includes('to_deactivate') &&
+        !allLoggedBarcodes.has(h.barcode)) {
+      const isAutoLost = proc === 'lost' && h.days_overdue === 0 && !h.due_date;
+      // Only backfill if it looks like an auto-conversion (was a loan gone overdue)
+      // rather than a manually marked lost item
+      if (h.is_overdue || (proc === 'lost' && h.due_date)) {
+        autoEvents.push({
+          type: 'auto_lost',
+          copy_num: h.copy_num, barcode: h.barcode || '',
+          device_type: h.device_type, library: h.library,
+          desc: 'Automatically moved to Lost/Missing (backfilled)',
+          detail: h.days_overdue > 0
+            ? `${h.days_overdue}d overdue — due ${h.due_date || '—'}`
+            : `Was overdue 90+ days — due ${h.due_date || '—'}`,
+        });
+      }
+    }
+
+    // Already expired with no prior log entry — backfill it
+    if (h.sub_status === 'Expired' && !allLoggedBarcodes.has(h.barcode) &&
+        !tabs.includes('archived')) {
+      autoEvents.push({
+        type: 'auto_expired',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Subscription expired (backfilled)',
+        detail: `Exp: ${h.exp_date ? formatDate(h.exp_date) : '—'}`,
+      });
+    }
+  });
+
+  // ── Forward-looking: detect NEW transitions since last session ────────────
   state.hotspots.forEach(h => {
     // Snapshot the state before recalcTabs modifies it
     const prevProcessType = h.process_type;
@@ -2571,7 +2615,7 @@ function checkAutomaticChanges() {
         detail: `Exp date ${h.exp_date} has passed`,
       });
     }
-  });
+  }); // end forward-looking forEach
 
   // If any automatic changes were found, record them as a system event
   if (autoEvents.length > 0) {
