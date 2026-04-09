@@ -2575,14 +2575,23 @@ function checkAutomaticChanges() {
 
   // If any automatic changes were found, record them as a system event
   if (autoEvents.length > 0) {
-    // Don't record if we already have an identical system check from today
-    // (prevents duplicate entries on multiple page loads same day)
+    // Deduplicate: don't re-record barcodes already captured in a prior system check today.
+    // But DO record if there are new barcodes not yet logged.
     const todayStr = new Date().toLocaleDateString();
-    const alreadyLogged = state.changeHistory.some(r =>
-      r.source === 'Automatic Daily Check' && r.date && r.date.startsWith(todayStr)
+    const alreadyLoggedBarcodes = new Set(
+      state.changeHistory
+        .filter(r => r.source === 'Automatic Daily Check' && r.date && r.date.startsWith(todayStr))
+        .flatMap(r => (r.events || []).map(e => e.barcode))
     );
+    const newEvents = autoEvents.filter(e => !alreadyLoggedBarcodes.has(e.barcode));
 
-    if (!alreadyLogged) {
+    if (newEvents.length > 0) {
+      // Replace autoEvents with only the genuinely new ones
+      autoEvents.length = 0;
+      newEvents.forEach(e => autoEvents.push(e));
+    }
+
+    if (autoEvents.length > 0) {
       const record = {
         id: Date.now(),
         source: 'Automatic Daily Check',
