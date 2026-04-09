@@ -792,12 +792,13 @@ const TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
 // TAB DEFINITIONS
 // ============================================================
 const STATUS_TABS = [
-  { id: 'in_stock',           label: 'In Stock',           color: 'green',  icon: '✓' },
-  { id: 'active_loans',       label: 'Active Loans',        color: 'blue',   icon: '↗' },
+  { id: 'in_stock',           label: 'In Stock',            color: 'green',  icon: '✓' },
+  { id: 'active_loans',       label: 'Active Loans',         color: 'blue',   icon: '↗' },
   { id: 'overdue',            label: 'Overdue',              color: 'yellow', icon: '⚠' },
   { id: 'lost_missing',       label: 'Lost / Missing',       color: 'red',    icon: '✕' },
   { id: 'sent_for_renewal',   label: 'Sent for Renewal',     color: 'teal',   icon: '↻' },
   { id: 'archived',           label: 'Archived',             color: 'orange', icon: '⊘' },
+  { id: 'mb_active',          label: 'MB Active Subs',       color: 'purple', icon: '📶' },
 ];
 const SUGGEST_TABS = [
   { id: 'to_be_reactivated', label: 'To Be Reactivated', color: 'purple', icon: '⟳' },
@@ -837,6 +838,7 @@ let state = {
 // ============================================================
 function getTabData(tabId) {
   if (tabId === 'sent_for_renewal') return state.hotspots.filter(h => h.sent_for_renewal);
+  if (tabId === 'mb_active')        return state.hotspots.filter(h => h.on_mb_active === true);
   return state.hotspots.filter(h => h.tabs.includes(tabId));
 }
 
@@ -1110,6 +1112,9 @@ function buildTable(data, tabId) {
   ];
   else if (tabId === 'sent_for_renewal') cols = [
     ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['phone','Phone'],['library','Library'],['exp_date','Current Exp'],['sub_status','Sub Status'],['renewal_sent_date','Sent Date'],['process_type','Process']
+  ];
+  else if (tabId === 'mb_active') cols = [
+    ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['phone','Phone'],['library','Library'],['exp_date','Sub Expires'],['sub_status','Sub Status'],['process_type','Process']
   ];
   else cols = [
     ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['library','Library'],['lis_status','Status'],['process_type','Process'],['exp_date','Exp Date'],['sub_status','Sub']
@@ -1656,6 +1661,7 @@ function handleMBDeactivationFile(file) {
       h.sub_status    = 'Deactivated';
       h.mb_deactivated = true;
       h.last_mb_updated = true; // include in Alma export
+      h.on_mb_active = false;   // deactivated = no longer on MB active list
       recalcTabs(h);
       deactivated++;
       events.push({
@@ -2021,6 +2027,7 @@ function handleMBFile(file, resultTarget) {
             h.renewal_sent_date = null;
           }
           h.last_mb_updated = true; // flag for Alma export
+          h.on_mb_active = true;    // confirmed on MB active list via renewal report
           recalcTabs(h);
         }
         matched++;
@@ -2288,6 +2295,9 @@ function handleMBActiveFile(file, resultTarget) {
           if (ph && ph !== h.phone) { h.phone = ph; changed = true; }
         }
 
+        // Mark as on MB active list
+        h.on_mb_active = true;
+
         // If it was previously MB-deactivated, clear that flag
         if (h.mb_deactivated) {
           h.mb_deactivated = false;
@@ -2309,8 +2319,8 @@ function handleMBActiveFile(file, resultTarget) {
         if (changed) { recalcTabs(h); updated++; }
 
       } else {
-        // Device is NOT on MB active list — mark as deactivated
-        // Only flag if not already deactivated/blocked
+        // Device is NOT on MB active list — clear active flag and mark as deactivated
+        h.on_mb_active = false;
         if (h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
           changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
           h.sub_status = 'Deactivated';
@@ -2527,148 +2537,122 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
 // Records these as change events in Recent Changes.
 // ============================================================
 function checkAutomaticChanges() {
-  const autoEvents = [];
+  // Step 1: Snapshot current saved state (before recalcTabs runs)
+  const prevState = {};
+  state.hotspots.forEach(h => {
+    prevState[h.barcode] = {
+      process_type: h.process_type,
+      sub_status:   h.sub_status,
+      tabs:         [...(h.tabs || [])],
+    };
+  });
 
-  // ── Backfill: find hotspots already in auto-lost/expired state with no history entry ──
-  // Catches devices that were converted before this tracking was set up.
+  // Step 2: Run recalcTabs on every hotspot — this may mutate process_type / sub_status / tabs
+  let anyMutation = false;
+  state.hotspots.forEach(h => {
+    const before = prevState[h.barcode];
+    recalcTabs(h);
+    if (h.process_type !== before.process_type ||
+        h.sub_status   !== before.sub_status) {
+      anyMutation = true;
+    }
+  });
+
+  // Step 3: Build events by comparing post-recalc state to pre-recalc snapshot
+  const autoEvents = [];
   const allLoggedBarcodes = new Set(
-    state.changeHistory
-      .flatMap(r => (r.events || []).map(e => e.barcode))
+    state.changeHistory.flatMap(r => (r.events || []).map(e => e.barcode))
   );
 
   state.hotspots.forEach(h => {
-    const tabs = h.tabs || [];
-    const proc = (h.process_type || '').toLowerCase();
+    const prev = prevState[h.barcode];
+    if (!prev) return;
 
-    // Already lost/missing with no prior log entry — backfill it
-    if (tabs.includes('lost_missing') && tabs.includes('to_deactivate') &&
-        !allLoggedBarcodes.has(h.barcode)) {
-      const isAutoLost = proc === 'lost' && h.days_overdue === 0 && !h.due_date;
-      // Only backfill if it looks like an auto-conversion (was a loan gone overdue)
-      // rather than a manually marked lost item
-      if (h.is_overdue || (proc === 'lost' && h.due_date)) {
-        autoEvents.push({
-          type: 'auto_lost',
-          copy_num: h.copy_num, barcode: h.barcode || '',
-          device_type: h.device_type, library: h.library,
-          desc: 'Automatically moved to Lost/Missing (backfilled)',
-          detail: h.days_overdue > 0
-            ? `${h.days_overdue}d overdue — due ${h.due_date || '—'}`
-            : `Was overdue 90+ days — due ${h.due_date || '—'}`,
-        });
-      }
+    const oldProc = (prev.process_type || '').toLowerCase().trim();
+    const newProc = (h.process_type   || '').toLowerCase().trim();
+    const oldSub  = prev.sub_status   || '';
+    const newSub  = h.sub_status      || '';
+
+    // Already logged for this barcode — skip (backfill guard)
+    const alreadyLogged = allLoggedBarcodes.has(h.barcode);
+
+    // Auto-lost: was a loan, now Lost, 90+ days overdue
+    if (!alreadyLogged &&
+        oldProc === 'loan' && newProc === 'lost' &&
+        h.days_overdue >= 90) {
+      autoEvents.push({
+        type: 'auto_lost',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Automatically moved to Lost/Missing — 90+ days overdue',
+        detail: `${h.days_overdue}d overdue (due ${h.due_date || '—'})`,
+      });
     }
 
-    // Already expired with no prior log entry — backfill it
-    if (h.sub_status === 'Expired' && !allLoggedBarcodes.has(h.barcode) &&
-        !tabs.includes('archived')) {
+    // Backfill auto-lost: already Lost/Missing+To Deactivate with no history at all
+    if (!alreadyLogged &&
+        newProc === 'lost' &&
+        (h.tabs || []).includes('lost_missing') &&
+        (h.tabs || []).includes('to_deactivate') &&
+        h.due_date) {
+      autoEvents.push({
+        type: 'auto_lost',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Automatically moved to Lost/Missing (backfilled)',
+        detail: `Was overdue 90+ days — due ${h.due_date}`,
+      });
+    }
+
+    // Auto-expired: sub_status newly became Expired
+    if (!alreadyLogged &&
+        oldSub !== 'Expired' && newSub === 'Expired' &&
+        !['Deactivated','Blocked'].includes(oldSub)) {
       autoEvents.push({
         type: 'auto_expired',
         copy_num: h.copy_num, barcode: h.barcode || '',
         device_type: h.device_type, library: h.library,
-        desc: 'Subscription expired (backfilled)',
+        desc: 'Subscription automatically marked Expired',
         detail: `Exp: ${h.exp_date ? formatDate(h.exp_date) : '—'}`,
       });
     }
   });
 
-  // ── Forward-looking: detect NEW transitions since last session ────────────
-  state.hotspots.forEach(h => {
-    // Snapshot the state before recalcTabs modifies it
-    const prevProcessType = h.process_type;
-    const prevSubStatus   = h.sub_status;
-    const prevTabs        = [...(h.tabs || [])];
-
-    // Run recalcTabs — this may auto-set process_type='Lost' or sub_status='Expired'
-    recalcTabs(h);
-
-    const newProcessType = h.process_type;
-    const newSubStatus   = h.sub_status;
-    const newTabs        = h.tabs || [];
-
-    // ── Detect auto-lost (90+ days overdue → process type changed to Lost) ──
-    if (prevProcessType !== 'Lost' && newProcessType === 'Lost' &&
-        !['lost','missing','lost and paid','claimed returned'].includes((prevProcessType||'').toLowerCase())) {
-      autoEvents.push({
-        type: 'auto_lost',
-        copy_num: h.copy_num,
-        barcode: h.barcode || '',
-        device_type: h.device_type,
-        library: h.library,
-        desc: 'Automatically moved to Lost/Missing',
-        detail: `Was overdue ${h.days_overdue || '90+'} days — process type set to Lost`,
-      });
-    }
-
-    // ── Detect newly expired subscription ───────────────────────────────────
-    // Only flag if it wasn't already expired last session AND it's not deactivated/blocked
-    // AND it's on a list where expired matters (not already archived)
-    if (prevSubStatus !== 'Expired' && newSubStatus === 'Expired' &&
-        !['Deactivated','Blocked'].includes(prevSubStatus)) {
-      autoEvents.push({
-        type: 'auto_expired',
-        copy_num: h.copy_num,
-        barcode: h.barcode || '',
-        device_type: h.device_type,
-        library: h.library,
-        desc: 'Subscription automatically marked Expired',
-        detail: `Exp date ${h.exp_date} has passed`,
-      });
-    }
-  }); // end forward-looking forEach
-
-  // If any automatic changes were found, record them as a system event
+  // Step 4: Record change history if there are new events
   if (autoEvents.length > 0) {
-    // Deduplicate: don't re-record barcodes already captured in a prior system check today.
-    // But DO record if there are new barcodes not yet logged.
-    const todayStr = new Date().toLocaleDateString();
-    const alreadyLoggedBarcodes = new Set(
-      state.changeHistory
-        .filter(r => r.source === 'Automatic Daily Check' && r.date && r.date.startsWith(todayStr))
-        .flatMap(r => (r.events || []).map(e => e.barcode))
-    );
-    const newEvents = autoEvents.filter(e => !alreadyLoggedBarcodes.has(e.barcode));
+    const record = {
+      id: Date.now(),
+      source: 'Automatic Daily Check',
+      date: new Date().toLocaleString(),
+      events: autoEvents,
+      profileId: null,
+      profileName: 'System',
+      profileColor: '#555d7a',
+      collapsed: false,
+      sectionState: {},
+      snapshot: null, // system checks are not undoable
+    };
+    state.changeHistory.unshift(record);
+    if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
 
-    if (newEvents.length > 0) {
-      // Replace autoEvents with only the genuinely new ones
-      autoEvents.length = 0;
-      newEvents.forEach(e => autoEvents.push(e));
-    }
+    const typeCounts = {};
+    autoEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
+    state.uploadHistory.unshift({
+      id: record.id,
+      date: record.date,
+      source: 'Automatic Daily Check',
+      profileId: null,
+      profileName: 'System',
+      profileColor: '#555d7a',
+      typeCounts,
+      totalEvents: autoEvents.length,
+    });
+    if (state.uploadHistory.length > 50) state.uploadHistory = state.uploadHistory.slice(0, 50);
+  }
 
-    if (autoEvents.length > 0) {
-      const record = {
-        id: Date.now(),
-        source: 'Automatic Daily Check',
-        date: new Date().toLocaleString(),
-        events: autoEvents,
-        profileId: null,
-        profileName: 'System',
-        profileColor: '#555d7a',
-        collapsed: false,
-        sectionState: {},
-        snapshot: null, // automatic checks are not undoable
-      };
-      state.changeHistory.unshift(record);
-      if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
-
-      // Also add to upload history
-      const typeCounts = {};
-      autoEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
-      state.uploadHistory.unshift({
-        id: record.id,
-        date: record.date,
-        source: 'Automatic Daily Check',
-        profileId: null,
-        profileName: 'System',
-        profileColor: '#555d7a',
-        typeCounts,
-        totalEvents: autoEvents.length,
-      });
-      if (state.uploadHistory.length > 50) state.uploadHistory = state.uploadHistory.slice(0, 50);
-
-      // Save updated state (includes new change records)
-      saveState();
-    }
+  // Step 5: Always save if recalcTabs mutated anything (persists process_type changes to DB)
+  if (anyMutation || autoEvents.length > 0) {
+    saveState();
   }
 }
 
