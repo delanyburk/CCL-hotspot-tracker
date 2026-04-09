@@ -678,6 +678,9 @@
   .override-btn:hover { background: var(--blue-bg); color: var(--accent); border-color: var(--accent2); }
   .override-btn.danger:hover { background: var(--red-bg); color: var(--red); border-color: var(--red); }
   .override-note { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.5; margin-top: 6px; }
+  .override-ai-result { font-size: 11px; color: var(--teal); font-family: 'DM Mono', monospace; margin-top: 8px; line-height: 1.6; padding: 8px 10px; background: var(--teal-bg); border-radius: 6px; }
+  .override-rule-list { margin-top: 12px; }
+  .override-rule-item { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; padding: 4px 8px; background: var(--surface2); border-radius: 4px; margin-bottom: 4px; border-left: 2px solid var(--accent); }
 
 </style>
 </head>
@@ -900,6 +903,25 @@ function recalcTabs(h) {
   }
   const isInactive = isDeactBlocked || isExpired;
 
+  // ── Flag newly-expired hotspots for Alma bulk update ──────────────────────
+  // Only flag if: expired, NOT deactivated/blocked (they get their own flag),
+  // NOT heading to active_loans+to_be_reactivated or in_stock+to_be_reactivated
+  // (rules 7 & 8 — those still show as "active" in Alma until reactivated),
+  // and the expiry date has changed since we last reported it to Alma.
+  if (isExpired && !isDeactBlocked) {
+    // Rules 7 & 8 only apply when NOT overdue — overdue+expired → archived, not to_be_reactivated
+    const isOverdueCheck = h.due_date && isOnLoan
+      ? (() => { try { return new Date(h.due_date) < TODAY; } catch { return false; } })()
+      : false;
+    const willBeReactivatable = isInactive && (
+      (isInPlace) ||                          // rule 8: in_stock + to_be_reactivated
+      (isOnLoan && !isOverdueCheck)           // rule 7: active_loans + to_be_reactivated
+    );
+    if (!willBeReactivatable && h.exp_date !== h.last_alma_exp_reported) {
+      h.last_mb_updated = true;
+    }
+  }
+
   // Overdue (loans only)
   let isOverdue = false, daysOverdue = 0;
   if (h.due_date && isOnLoan) {
@@ -968,6 +990,8 @@ function recalcTabs(h) {
   // ── Rule 6: inactive + not in place + not active loan → Archived only ────
   if (isInactive) {
     tabs.add('archived');
+    // Flag deactivated/blocked devices for Alma bulk update (adds "Deactivated" to notes/description)
+    if (isDeactBlocked && !h.last_mb_updated) h.last_mb_updated = true;
     h.tabs = Array.from(tabs);
     return h;
   }
@@ -997,6 +1021,7 @@ function recalcTabs(h) {
   if (isLostProc) {
     if (isInactive) {
       tabs.add('archived');
+      if (isDeactBlocked && !h.last_mb_updated) h.last_mb_updated = true;
     } else {
       tabs.add('lost_missing');
       tabs.add('to_deactivate');
@@ -1563,8 +1588,8 @@ function renderUpload() {
     const changed = state.hotspots.filter(h => h.last_mb_updated).length;
     const el = document.getElementById('alma-report-count');
     if (el) el.textContent = changed > 0
-      ? changed + ' device' + (changed !== 1 ? 's' : '') + ' have pending Alma updates (expiration dates, deactivations, and/or IMEI changes)'
-      : 'No pending updates — upload a Mobile Beacon file or edit an IMEI to generate a report';
+      ? changed + ' device' + (changed !== 1 ? 's' : '') + ' have pending Alma updates'
+      : 'No pending updates — upload a Mobile Beacon file first';
   }, 0);
 }
 
@@ -1734,8 +1759,12 @@ function generateAlmaReport() {
     const _t = new Date(); const today = _t.getFullYear()+'-'+String(_t.getMonth()+1).padStart(2,'0')+'-'+String(_t.getDate()).padStart(2,'0');
     XLSX.writeFile(wb, 'alma_bulk_update_' + today + '.xlsx');
 
-    // Clear the last_mb_updated flags after export
-    pending.forEach(h => { h.last_mb_updated = false; });
+    // Clear the last_mb_updated flags after export, and record the exp date we reported
+    pending.forEach(h => {
+      h.last_mb_updated = false;
+      // Remember what exp date was included in this report so we don't re-flag the same expiry
+      if (h.exp_date) h.last_alma_exp_reported = h.exp_date;
+    });
     saveState();
     updateBadges();
     if (state.page === 'upload') renderUpload();
@@ -2816,6 +2845,19 @@ function showDetail(barcode) {
       <div class="detail-field-value">${f.value}</div>
     </div>`).join('');
 
+  // Build override options — tabs this device could be added to or removed from
+  const removableTabs = lists.filter(t => !['sent_for_renewal'].includes(t));
+  const addableTabs   = ALL_TABS.filter(t => !lists.includes(t.id)).map(t => t.id);
+
+  const removeOptions = removableTabs.map(t => {
+    const lbl = ALL_TABS.find(x => x.id === t)?.label || t;
+    return `<option value="${t}">Remove from: ${lbl}</option>`;
+  }).join('');
+  const addOptions = addableTabs.map(t => {
+    const lbl = ALL_TABS.find(x => x.id === t)?.label || t;
+    return `<option value="${t}">Add to: ${lbl}</option>`;
+  }).join('');
+
   document.getElementById('detail-modal-content').innerHTML = `
     <div class="detail-modal-header">
       <div class="detail-modal-avatar" style="background:${typeColor}">${h.device_type || '?'}</div>
@@ -2831,24 +2873,69 @@ function showDetail(barcode) {
     <div class="detail-fields">${fieldsHtml}</div>
 
     <div class="override-section">
-      <div class="override-section-label">✏ Edit IMEI</div>
+      <div class="override-section-label">⚙ Manual Override</div>
+
+      <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin-bottom:6px">Edit IMEI</div>
       <div class="override-row">
         <input class="pm-input" id="override-imei-input" type="text"
           placeholder="Enter correct IMEI number"
           value="${h.imei || ''}"
           maxlength="20"
-          style="flex:1;font-size:12px;padding:7px 10px"
-          onkeydown="if(event.key==='Enter'){var v=this.value.trim().replace(/\\D/g,'');if(!v||v.length<14||v.length>16){notify('IMEI must be 14–16 digits','error');return;}updateHotspotIMEI('${h.barcode}',v);}">
-        <button class="override-btn" onclick="
-          var inp=document.getElementById('override-imei-input');
-          var v=inp?inp.value.trim().replace(/\\D/g,''):'';
-          if(!v||v.length<14||v.length>16){notify('IMEI must be 14–16 digits','error');return;}
-          updateHotspotIMEI('${h.barcode}',v);
-        ">Save IMEI</button>
+          style="flex:1;font-size:12px;padding:7px 10px">
+        <button class="override-btn" id="override-imei-btn">Save IMEI</button>
       </div>
-      <div class="override-note">Saving a new IMEI will flag this device for the next Alma Bulk Update report so the record is kept in sync.</div>
+
+      <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin:10px 0 6px">Move to / Remove from List</div>
+      <div class="override-row">
+        <select class="override-select" id="override-tab-select">
+          <option value="">— Select action —</option>
+          ${addOptions}
+          ${removableTabs.length ? '<option disabled>──────────</option>' : ''}
+          ${removeOptions}
+        </select>
+        <button class="override-btn" id="override-apply-btn">Apply</button>
+        <button class="override-btn" onclick="applyManualOverride('${h.barcode}','recalc',null)" title="Reset to computed state">↺ Reset</button>
+      </div>
+      <div class="override-note">List overrides are analyzed by AI to improve future categorization.</div>
+      <div class="override-ai-result" id="override-ai-result" style="display:none"></div>
+      ${state.overrideRules && state.overrideRules.length ? `
+        <div class="override-section-label" style="margin-top:12px">Recent List Overrides</div>
+        <div class="override-rule-list" id="override-rules-list"></div>
+      ` : ''}
     </div>
   `;
+
+  // Fix the apply button to read value correctly from select
+  setTimeout(() => {
+    // Wire list override apply button
+    const sel2 = document.getElementById('override-tab-select');
+    const applyBtn = document.getElementById('override-apply-btn');
+    if (applyBtn && sel2) {
+      applyBtn.onclick = () => {
+        const v = sel2.value;
+        if (!v) { notify('Select a list action first', 'error'); return; }
+        const isRemove = v.startsWith('remove:');
+        applyManualOverride('${h.barcode}', isRemove ? 'remove' : 'add', isRemove ? v.slice(7) : v);
+      };
+    }
+    // Wire IMEI save button
+    const imeiBtn = document.getElementById('override-imei-btn');
+    const imeiInput = document.getElementById('override-imei-input');
+    if (imeiBtn && imeiInput) {
+      imeiBtn.onclick = () => {
+        const newIMEI = imeiInput.value.trim().replace(/\D/g, '');
+        if (!newIMEI || newIMEI.length < 14 || newIMEI.length > 16) {
+          notify('IMEI must be 14–16 digits', 'error');
+          return;
+        }
+        updateHotspotIMEI('${h.barcode}', newIMEI);
+      };
+    }
+  }, 0);
+
+  // Render recent overrides for this device
+  const rulesDiv = document.getElementById('override-rules-list');
+  if (rulesDiv) renderOverrideRules(rulesDiv);
 
   document.getElementById('detail-overlay').classList.remove('hidden');
 }
@@ -2858,7 +2945,22 @@ function closeDetail() {
 }
 
 // ============================================================
-// PROFILE SYSTEM
+// MANUAL OVERRIDE SYSTEM
+// ============================================================
+// Stores user-defined override rules learned from manual moves
+if (!state.overrideRules) state.overrideRules = [];
+
+const ALL_TABS = [
+  { id: 'in_stock',          label: 'In Stock' },
+  { id: 'active_loans',      label: 'Active Loans' },
+  { id: 'overdue',           label: 'Overdue' },
+  { id: 'lost_missing',      label: 'Lost / Missing' },
+  { id: 'archived',          label: 'Archived' },
+  { id: 'sent_for_renewal',  label: 'Sent for Renewal' },
+  { id: 'to_deactivate',     label: 'To Deactivate' },
+  { id: 'to_be_reactivated', label: 'To Reactivate' },
+  { id: 'upcoming_renewals', label: 'Upcoming Renewals' },
+];
 
 function updateHotspotIMEI(barcode, newIMEI) {
   const h = state.hotspots.find(x => x.barcode === barcode);
@@ -2878,7 +2980,6 @@ function updateHotspotIMEI(barcode, newIMEI) {
 
   h.imei = newIMEI;
   h.imei_verified = true;
-  h.last_mb_updated = true;  // include in next Alma Bulk Update report
 
   saveState();
   updateBadges();
@@ -2890,6 +2991,129 @@ function updateHotspotIMEI(barcode, newIMEI) {
 
   // Refresh the detail modal to show the updated IMEI in Device Details
   showDetail(barcode);
+}
+
+function applyManualOverride(barcode, action, targetTab) {
+  const h = state.hotspots.find(x => x.barcode === barcode);
+  if (!h) return;
+
+  const prevTabs = [...h.tabs];
+  const prevSentForRenewal = h.sent_for_renewal;
+
+  if (action === 'add' && targetTab) {
+    if (!h.tabs.includes(targetTab)) h.tabs.push(targetTab);
+    if (targetTab === 'sent_for_renewal') {
+      h.sent_for_renewal = true;
+      const _tn = new Date(); h.renewal_sent_date = _tn.getFullYear()+'-'+String(_tn.getMonth()+1).padStart(2,'0')+'-'+String(_tn.getDate()).padStart(2,'0');
+    }
+  } else if (action === 'remove' && targetTab) {
+    h.tabs = h.tabs.filter(t => t !== targetTab);
+    if (targetTab === 'sent_for_renewal') h.sent_for_renewal = false;
+  } else if (action === 'recalc') {
+    // Reset to computed state
+    recalcTabs(h);
+  }
+
+  // Store the override action for AI analysis
+  const overrideRecord = {
+    id: Date.now(),
+    barcode: h.barcode,
+    copy_num: h.copy_num,
+    action,
+    targetTab,
+    prevTabs,
+    newTabs: [...h.tabs],
+    hotspotState: {
+      sub_status: h.sub_status,
+      process_type: h.process_type,
+      lis_status: h.lis_status,
+      exp_date: h.exp_date,
+      due_date: h.due_date,
+      days_overdue: h.days_overdue,
+    },
+    aiAnalysis: null,
+    date: new Date().toLocaleString(),
+  };
+
+  if (!state.overrideRules) state.overrideRules = [];
+  state.overrideRules.unshift(overrideRecord);
+  if (state.overrideRules.length > 50) state.overrideRules = state.overrideRules.slice(0, 50);
+
+  saveState();
+  updateBadges();
+
+  // Show result in modal and trigger AI analysis
+  const aiDiv = document.getElementById('override-ai-result');
+  if (aiDiv) {
+    aiDiv.textContent = '⟳ Analyzing your override…';
+    aiDiv.style.display = 'block';
+  }
+  analyzeOverrideWithAI(overrideRecord, h);
+
+  // Re-render the detail modal to reflect new tabs
+  showDetail(barcode);
+}
+
+async function analyzeOverrideWithAI(record, h) {
+  const prompt = `A library staff member manually changed a hotspot's list placement in an inventory tracking system.
+
+Hotspot state when the override was made:
+- Sub Status: ${record.hotspotState.sub_status}
+- Process Type: ${record.hotspotState.process_type}
+- LIS Status: ${record.hotspotState.lis_status}
+- Expiration Date: ${record.hotspotState.exp_date || 'none'}
+- Due Date: ${record.hotspotState.due_date || 'none'}
+- Days Overdue: ${record.hotspotState.days_overdue}
+
+The staff member ${record.action === 'add' ? 'ADDED this hotspot to' : record.action === 'remove' ? 'REMOVED this hotspot from' : 'reset'} the "${record.targetTab}" list.
+Previous lists it was on: ${record.prevTabs.join(', ') || 'none'}
+New lists it is on: ${record.newTabs.join(', ') || 'none'}
+
+In 1-2 sentences: Why might they have done this, and what rule exception does this suggest? Be specific and concise. Start with "Likely reason:".`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 150,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const analysis = data.content?.[0]?.text || 'Could not analyze.';
+      record.aiAnalysis = analysis;
+
+      // Update the UI if still on same modal
+      const aiDiv = document.getElementById('override-ai-result');
+      if (aiDiv) {
+        aiDiv.textContent = analysis;
+      }
+      // Add to override rules list display
+      const rulesDiv = document.getElementById('override-rules-list');
+      if (rulesDiv) renderOverrideRules(rulesDiv);
+
+      saveState();
+    }
+  } catch(e) {
+    const aiDiv = document.getElementById('override-ai-result');
+    if (aiDiv) aiDiv.textContent = 'AI analysis unavailable — override saved.';
+  }
+}
+
+function renderOverrideRules(container) {
+  if (!state.overrideRules || !state.overrideRules.length) {
+    container.innerHTML = '<div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace">No manual overrides recorded yet.</div>';
+    return;
+  }
+  container.innerHTML = state.overrideRules.slice(0, 5).map(r =>
+    `<div class="override-rule-item">
+      c.${r.copy_num} — ${r.action} "${r.targetTab}" — ${r.date}<br>
+      ${r.aiAnalysis ? '<span style="color:var(--teal)">' + r.aiAnalysis + '</span>' : '<span style="opacity:0.5">Analyzing…</span>'}
+    </div>`
+  ).join('');
 }
 
 // ============================================================
