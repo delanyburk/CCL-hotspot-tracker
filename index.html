@@ -326,6 +326,10 @@
   .rcs-status .rc-section-header { color: var(--purple); border-left: 3px solid var(--purple); }
   .rcs-status .rc-section-count { background: var(--purple-bg); color: var(--purple); }
   .rcs-new .rc-section-header { color: var(--green); border-left: 3px solid var(--green); }
+  .rcs-auto-lost .rc-section-header { color: var(--red); border-left: 3px solid var(--red); }
+  .rcs-auto-lost .rc-section-count { background: var(--red-bg); color: var(--red); }
+  .rcs-auto-expired .rc-section-header { color: var(--orange); border-left: 3px solid var(--orange); }
+  .rcs-auto-expired .rc-section-count { background: var(--orange-bg); color: var(--orange); }
   .rcs-new .rc-section-count { background: var(--green-bg); color: var(--green); }
   .rcs-restored .rc-section-header { color: var(--purple); border-left: 3px solid var(--purple); }
   .rcs-restored .rc-section-count { background: var(--purple-bg); color: var(--purple); }
@@ -2516,6 +2520,105 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
 }
 
 // Record a completed upload into history
+// ============================================================
+// AUTOMATIC CHANGE DETECTION
+// Runs on load to detect hotspots that have crossed thresholds
+// (90+ days overdue → auto-lost, subscription expired) since last session.
+// Records these as change events in Recent Changes.
+// ============================================================
+function checkAutomaticChanges() {
+  const autoEvents = [];
+
+  state.hotspots.forEach(h => {
+    // Snapshot the state before recalcTabs modifies it
+    const prevProcessType = h.process_type;
+    const prevSubStatus   = h.sub_status;
+    const prevTabs        = [...(h.tabs || [])];
+
+    // Run recalcTabs — this may auto-set process_type='Lost' or sub_status='Expired'
+    recalcTabs(h);
+
+    const newProcessType = h.process_type;
+    const newSubStatus   = h.sub_status;
+    const newTabs        = h.tabs || [];
+
+    // ── Detect auto-lost (90+ days overdue → process type changed to Lost) ──
+    if (prevProcessType !== 'Lost' && newProcessType === 'Lost' &&
+        !['lost','missing','lost and paid','claimed returned'].includes((prevProcessType||'').toLowerCase())) {
+      autoEvents.push({
+        type: 'auto_lost',
+        copy_num: h.copy_num,
+        barcode: h.barcode || '',
+        device_type: h.device_type,
+        library: h.library,
+        desc: 'Automatically moved to Lost/Missing',
+        detail: `Was overdue ${h.days_overdue || '90+'} days — process type set to Lost`,
+      });
+    }
+
+    // ── Detect newly expired subscription ───────────────────────────────────
+    // Only flag if it wasn't already expired last session AND it's not deactivated/blocked
+    // AND it's on a list where expired matters (not already archived)
+    if (prevSubStatus !== 'Expired' && newSubStatus === 'Expired' &&
+        !['Deactivated','Blocked'].includes(prevSubStatus)) {
+      autoEvents.push({
+        type: 'auto_expired',
+        copy_num: h.copy_num,
+        barcode: h.barcode || '',
+        device_type: h.device_type,
+        library: h.library,
+        desc: 'Subscription automatically marked Expired',
+        detail: `Exp date ${h.exp_date} has passed`,
+      });
+    }
+  });
+
+  // If any automatic changes were found, record them as a system event
+  if (autoEvents.length > 0) {
+    // Don't record if we already have an identical system check from today
+    // (prevents duplicate entries on multiple page loads same day)
+    const todayStr = new Date().toLocaleDateString();
+    const alreadyLogged = state.changeHistory.some(r =>
+      r.source === 'Automatic Daily Check' && r.date && r.date.startsWith(todayStr)
+    );
+
+    if (!alreadyLogged) {
+      const record = {
+        id: Date.now(),
+        source: 'Automatic Daily Check',
+        date: new Date().toLocaleString(),
+        events: autoEvents,
+        profileId: null,
+        profileName: 'System',
+        profileColor: '#555d7a',
+        collapsed: false,
+        sectionState: {},
+        snapshot: null, // automatic checks are not undoable
+      };
+      state.changeHistory.unshift(record);
+      if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
+
+      // Also add to upload history
+      const typeCounts = {};
+      autoEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
+      state.uploadHistory.unshift({
+        id: record.id,
+        date: record.date,
+        source: 'Automatic Daily Check',
+        profileId: null,
+        profileName: 'System',
+        profileColor: '#555d7a',
+        typeCounts,
+        totalEvents: autoEvents.length,
+      });
+      if (state.uploadHistory.length > 50) state.uploadHistory = state.uploadHistory.slice(0, 50);
+
+      // Save updated state (includes new change records)
+      saveState();
+    }
+  }
+}
+
 function recordUpload(source, events) {
   if (!events || !events.length) return;
   const prof = state.profiles.find(p => p.id === state.activeProfileId);
@@ -2608,15 +2711,17 @@ function renderChanges() {
   }
 
   const SECTIONS = [
-    { key: 'checked_out',    label: 'Checked Out',           cls: 'rcs-checked-out' },
-    { key: 'returned',       label: 'Returned to Library',   cls: 'rcs-returned' },
-    { key: 'renewed',        label: 'Renewed / Exp Updated', cls: 'rcs-renewed' },
-    { key: 'archived',       label: 'Moved to Archive',      cls: 'rcs-archived' },
-    { key: 'deactivated_mb', label: 'Deactivated by MB Recon', cls: 'rcs-deactivated' },
-    { key: 'restored',       label: 'Restored (MB Recon)',   cls: 'rcs-restored' },
-    { key: 'status_change',  label: 'Status Changes',        cls: 'rcs-status' },
+    { key: 'checked_out',    label: 'Checked Out',              cls: 'rcs-checked-out' },
+    { key: 'returned',       label: 'Returned to Library',      cls: 'rcs-returned' },
+    { key: 'renewed',        label: 'Renewed / Exp Updated',    cls: 'rcs-renewed' },
+    { key: 'archived',       label: 'Moved to Archive',         cls: 'rcs-archived' },
+    { key: 'deactivated_mb', label: 'Deactivated by MB Recon',  cls: 'rcs-deactivated' },
+    { key: 'restored',       label: 'Restored (MB Recon)',      cls: 'rcs-restored' },
+    { key: 'auto_lost',      label: 'Auto-Moved to Lost/Missing (90+ days overdue)', cls: 'rcs-auto-lost' },
+    { key: 'auto_expired',   label: 'Auto-Marked Expired',      cls: 'rcs-auto-expired' },
+    { key: 'status_change',  label: 'Status Changes',           cls: 'rcs-status' },
     { key: 'sent_for_renewal', label: 'Sent for Renewal',       cls: 'rcs-teal' },
-    { key: 'new_device',       label: 'New Devices Added',     cls: 'rcs-new' },
+    { key: 'new_device',       label: 'New Devices Added',      cls: 'rcs-new' },
   ];
 
   let html = `<div class="rc-header">
@@ -3301,11 +3406,13 @@ function renderHistory() {
   const TYPE_LABELS = {
     checked_out: 'Checked out', returned: 'Returned', renewed: 'Renewed',
     archived: 'Archived', deactivated_mb: 'Deactivated (MB)', restored: 'Restored (MB)',
+    auto_lost: 'Auto-lost (90d+)', auto_expired: 'Auto-expired',
     status_change: 'Status changed', new_device: 'New device', sent_for_renewal: 'Sent for renewal',
   };
   const TYPE_COLORS = {
     checked_out: 'var(--accent)', returned: 'var(--green)', renewed: 'var(--yellow)',
     archived: 'var(--orange)', deactivated_mb: 'var(--red)', restored: 'var(--purple)',
+    auto_lost: 'var(--red)', auto_expired: 'var(--orange)',
     status_change: 'var(--purple)', new_device: 'var(--green)', sent_for_renewal: 'var(--teal)',
   };
 
@@ -3559,10 +3666,9 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   await loadState();
   state.dataLoaded = true; // mark data as ready for snapshotting
 
-  // Recalculate tabs, overdue counts, and expiry status for every hotspot
-  // using today's real date. This ensures days-overdue and expired flags
-  // are always current, not frozen at the time of the last file upload.
-  state.hotspots.forEach(h => recalcTabs(h));
+  // Check for automatic status changes (90d overdue → Lost, expired subs)
+  // and record them in Recent Changes before recalculating tabs.
+  checkAutomaticChanges();
 
   // Clean up any bad upload records where ALL events are false new_device floods
   state.changeHistory = state.changeHistory.filter(r => {
