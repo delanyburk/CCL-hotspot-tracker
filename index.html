@@ -1904,7 +1904,15 @@ function handleLISFile(file) {
         // LIS uploads ONLY update: process_type, lis_status, due_date, library, description
         // NEVER update sub_status or exp_date from LIS — those come from Mobile Beacon only
         if (changed) {
-          existing.process_type = proc;
+          // Do NOT let Alma overwrite a process_type that we auto-set to 'Lost'.
+          // If this device was auto-converted (90+ days overdue) we keep 'Lost'
+          // even if Alma still says 'Loan' — Alma doesn't know about our auto-convert.
+          const isAutoLost = existing.process_type === 'Lost' &&
+            existing.is_overdue && existing.days_overdue >= 90 &&
+            proc.toLowerCase() === 'loan';
+          if (!isAutoLost) {
+            existing.process_type = proc;
+          }
           existing.lis_status   = stat;
           existing.due_date     = due;
           existing.description  = desc;
@@ -2363,113 +2371,118 @@ function takeSnapshot() {
 function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated, added) {
   const events = [];
 
-  // Guard: if no valid snapshot, nothing to diff — skip silently
   if (!_preUploadSnapshot || !Array.isArray(_preUploadSnapshot) || _preUploadSnapshot.length === 0) {
     return events;
   }
 
-  // Build lookup from pre-upload snapshot
   const prev = {};
   _preUploadSnapshot.forEach(h => { prev[h.barcode] = h; });
 
   hotspots.forEach(h => {
-    const b = h.barcode;
-    const old = prev[b];
+    const old = prev[h.barcode];
+    if (!old) return; // genuinely new devices handled by New Devices upload handler
 
-    if (!old) {
-      // Only flag as new if it was genuinely added via the New Devices upload handler,
-      // not just because the snapshot was missing. Since we guard above, this is safe.
-      events.push({ type: 'new_device', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `New device added (${h.device_type})`, detail: h.barcode });
-      return;
-    }
-
-    const oldProc = (old.process_type||'').toLowerCase().trim();
-    const newProc = (h.process_type||'').toLowerCase().trim();
+    // Use TAB membership as ground truth — not raw process_type strings.
+    // process_type can be briefly wrong mid-upload (auto-Lost devices that Alma
+    // still records as Loan). Tabs are set by recalcTabs AFTER all processing.
     const oldTabs = old.tabs || [];
     const newTabs = h.tabs || [];
 
-    // ── Checked out (blank/in-place → loan) ──────────────────────────────
-    // Guard: must actually be on active_loans tab now (not overdue/lost)
-    if (oldProc !== 'loan' && newProc === 'loan' &&
-        newTabs.includes('active_loans') && !oldTabs.includes('active_loans')) {
-      events.push({ type: 'checked_out', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Checked out`, detail: `Due: ${h.due_date || '—'}` });
+    const wasOnLoan   = oldTabs.includes('active_loans');
+    const isOnLoan    = newTabs.includes('active_loans');
+    const wasOverdue  = oldTabs.includes('overdue');
+    const isOverdue   = newTabs.includes('overdue');
+    const wasLost     = oldTabs.includes('lost_missing');
+    const isLost      = newTabs.includes('lost_missing');
+    const wasInStock  = oldTabs.includes('in_stock');
+    const isInStock   = newTabs.includes('in_stock');
+    const wasArchived = oldTabs.includes('archived');
+    const isArchived  = newTabs.includes('archived');
+
+    // Checked out: moved onto active_loans from elsewhere
+    if (!wasOnLoan && !wasOverdue && !wasLost && isOnLoan) {
+      events.push({ type: 'checked_out',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Checked out',
+        detail: 'Due: ' + (h.due_date || '\u2014') });
     }
 
-    // ── Returned (loan → blank/in-place) ─────────────────────────────────
-    if (oldProc === 'loan' && !['loan','lost','missing','lost and paid','claimed returned'].includes(newProc)) {
-      const reason = h.sub_status === 'Deactivated' || h.sub_status === 'Blocked' ? ' — needs reactivation' :
-                     h.sub_status === 'Expired' ? ' — sub expired' : '';
-      events.push({ type: 'returned', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Returned to library${reason}`, detail: `Was due: ${old.due_date || '—'}` });
+    // Returned: was on loan or overdue, now in stock
+    if ((wasOnLoan || wasOverdue) && isInStock && !wasInStock) {
+      const note = (h.sub_status === 'Deactivated' || h.sub_status === 'Blocked')
+        ? ' \u2014 needs reactivation' : h.sub_status === 'Expired' ? ' \u2014 sub expired' : '';
+      events.push({ type: 'returned',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Returned to library' + note,
+        detail: 'Was due: ' + (old.due_date || '\u2014') });
     }
 
-    // ── Newly overdue (any days) ──────────────────────────────────────────
-    if (!oldTabs.includes('overdue') && newTabs.includes('overdue')) {
-      const urgency = h.days_overdue <= 10 ? '🔴 ' : h.days_overdue <= 30 ? '🟡 ' : '';
-      events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `${urgency}Became overdue`, detail: `${h.days_overdue}d past due (${h.due_date})` });
+    // Recovered from lost/missing: genuinely off lost_missing AND back in stock or on loan
+    if (wasLost && !isLost && (isInStock || isOnLoan)) {
+      events.push({ type: 'returned',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Recovered from ' + (old.process_type || 'Lost/Missing'),
+        detail: isInStock ? 'Now in stock' : 'Now on active loan' });
     }
 
-    // ── Due date changed (e.g. renewed loan) ─────────────────────────────
-    if (old.due_date && h.due_date && old.due_date !== h.due_date && newProc === 'loan') {
-      events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Due date updated`, detail: `${old.due_date} → ${h.due_date}` });
+    // Became overdue (and wasn't already lost)
+    if (!wasOverdue && !wasLost && isOverdue) {
+      events.push({ type: 'status_change',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Became overdue',
+        detail: h.days_overdue + 'd past due (' + (h.due_date || '\u2014') + ')' });
     }
 
-    // ── Moved to lost / missing ───────────────────────────────────────────
-    if (!['lost','missing','lost and paid','claimed returned'].includes(oldProc) &&
-        ['lost','missing','lost and paid','claimed returned'].includes(newProc)) {
-      events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Marked ${h.process_type}`, detail: `Was: ${old.process_type || 'In stock'}` });
+    // Due date changed on an active loan
+    if (old.due_date && h.due_date && old.due_date !== h.due_date && isOnLoan) {
+      events.push({ type: 'status_change',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Due date updated',
+        detail: old.due_date + ' \u2192 ' + h.due_date });
     }
 
-    // ── Recovered from lost/missing ───────────────────────────────────────
-    // Only fire if the device is genuinely no longer on the lost_missing tab.
-    // This prevents false positives when recalcTabs auto-corrects process_type
-    // (e.g. 90d-overdue auto-lost devices still appear on lost_missing tab).
-    if (['lost','missing','lost and paid','claimed returned'].includes(oldProc) &&
-        !['lost','missing','lost and paid','claimed returned'].includes(newProc) &&
-        !newTabs.includes('lost_missing')) {
-      events.push({ type: 'returned', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Recovered — was ${old.process_type}`, detail: '' });
+    // Newly on lost/missing (and wasn't already archived)
+    if (!wasLost && isLost && !wasArchived) {
+      events.push({ type: 'status_change',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Marked ' + (h.process_type || 'Lost/Missing'),
+        detail: 'Was: ' + (old.process_type || 'In Stock') });
     }
 
-    // ── Moved to archive ──────────────────────────────────────────────────
-    if (!oldTabs.includes('archived') && newTabs.includes('archived')) {
-      const reason = (h.sub_status === 'Deactivated') ? 'Deactivated in description' :
-                     (h.sub_status === 'Blocked') ? 'Blocked in description' :
-                     (h.is_overdue && h.days_overdue >= 90) ? `${h.days_overdue}d overdue + expired` :
+    // Moved to archive
+    if (!wasArchived && isArchived) {
+      const reason = h.sub_status === 'Deactivated' ? 'Deactivated' :
+                     h.sub_status === 'Blocked'      ? 'Blocked' :
+                     h.days_overdue >= 90             ? h.days_overdue + 'd overdue' :
                      'Subscription expired';
-      events.push({ type: 'archived', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: `Moved to Archive`, detail: reason });
+      events.push({ type: 'archived',
+        copy_num: h.copy_num, barcode: h.barcode || '',
+        device_type: h.device_type, library: h.library,
+        desc: 'Moved to Archive', detail: reason });
     }
 
-    // ── Subscription status changed ───────────────────────────────────────
-    if (old.sub_status !== h.sub_status) {
-      const alreadyCovered = events.some(e => e.copy_num === h.copy_num && e.type === 'archived');
-      if (!alreadyCovered && old.sub_status && h.sub_status) {
-        events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-          desc: `Subscription status changed`, detail: `${old.sub_status} → ${h.sub_status}` });
-      }
-    }
-
-    // ── LIS status changed (e.g. Item in place → Item not in place) ───────
+    // LIS location status changed (only if not already covered above)
     if (old.lis_status && h.lis_status && old.lis_status !== h.lis_status) {
-      const alreadyCovered = events.some(e => e.copy_num === h.copy_num &&
-        ['checked_out','returned','status_change'].includes(e.type));
+      const alreadyCovered = events.some(e => e.barcode === h.barcode);
       if (!alreadyCovered) {
-        events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-          desc: `Location status changed`, detail: `${old.lis_status} → ${h.lis_status}` });
+        events.push({ type: 'status_change',
+          copy_num: h.copy_num, barcode: h.barcode || '',
+          device_type: h.device_type, library: h.library,
+          desc: 'Location status changed',
+          detail: old.lis_status + ' \u2192 ' + h.lis_status });
       }
     }
   });
 
-  // ── Flagged archived-item returns ─────────────────────────────────────────
   flagged.forEach(f => {
     events.push({ type: 'returned', copy_num: null, device_type: '', library: '',
-      desc: f.replace(/<[^>]+>/g,''), detail: 'Previously archived' });
+      desc: f.replace(/<[^>]+>/g, ''), detail: 'Previously archived' });
   });
 
   return events;
