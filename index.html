@@ -297,43 +297,22 @@
   .rc-section-items.hidden { display: none; }
 
   .rc-item {
-    display: grid; grid-template-columns: 56px 56px 110px 1fr auto auto;
-    align-items: start; gap: 12px; padding: 9px 18px;
+    display: grid; grid-template-columns: 56px 56px 110px 1fr auto;
+    align-items: center; gap: 12px; padding: 8px 18px;
     border-bottom: 1px solid var(--border); font-size: 12px;
     transition: background 0.1s;
   }
   .rc-item:last-child { border-bottom: none; }
   .rc-item:hover { background: rgba(255,255,255,0.02); }
   .rc-item.clickable:hover { background: rgba(255,255,255,0.05); cursor: pointer; }
-  .rc-item-copy { font-weight: 700; font-family: 'Syne', sans-serif; font-size: 13px; color: var(--text); padding-top: 2px; }
-  .rc-item-type { padding-top: 2px; }
-  .rc-item-barcode { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-top: 4px; }
-  .rc-item-main { display: flex; flex-direction: column; gap: 3px; }
-  .rc-item-desc { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); font-weight: 600; }
-  .rc-item-change { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text3); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-  .rc-item-change .old { color: var(--red); text-decoration: line-through; }
-  .rc-item-change .new { color: var(--green); font-weight: 600; }
-  .rc-item-change .arrow { color: var(--text3); opacity: 0.6; }
-  .rc-item-lib { padding-top: 2px; }
-  .rc-why-btn {
-    font-size: 9px; font-family: 'DM Mono', monospace; font-weight: 700;
-    padding: 2px 7px; border-radius: 4px; border: 1px solid var(--border2);
-    background: var(--surface2); color: var(--text3); cursor: pointer;
-    white-space: nowrap; transition: all 0.15s; letter-spacing: 0.05em;
-    align-self: start; margin-top: 2px;
-  }
-  .rc-why-btn:hover { background: var(--blue-bg); color: var(--accent); border-color: var(--accent2); }
-  .rc-why-popover {
-    display: none; position: fixed; z-index: 9999;
-    background: var(--surface); border: 1px solid var(--border2);
-    border-radius: 10px; padding: 12px 16px; max-width: 340px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    font-family: 'DM Mono', monospace; font-size: 11px; line-height: 1.6;
-    color: var(--text2);
-  }
-  .rc-why-popover.visible { display: block; }
-  .rc-why-popover-title { font-weight: 700; color: var(--accent); margin-bottom: 6px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
-  .rc-why-popover-close { float: right; cursor: pointer; color: var(--text3); font-size: 13px; line-height: 1; margin-left: 8px; }
+  .rc-item-copy { font-weight: 700; font-family: 'Syne', sans-serif; font-size: 13px; color: var(--text); }
+  .rc-item-type { }
+  .rc-item-desc { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); }
+  .rc-item-barcode { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rc-item-desc .old { color: var(--red); text-decoration: line-through; }
+  .rc-item-desc .new { color: var(--green); }
+  .rc-item-desc .reason { color: var(--orange); font-style: italic; }
+  .rc-item-lib { }
 
   /* section colour theming */
   .rcs-checked-out .rc-section-header { color: var(--accent); border-left: 3px solid var(--accent); }
@@ -347,10 +326,6 @@
   .rcs-status .rc-section-header { color: var(--purple); border-left: 3px solid var(--purple); }
   .rcs-status .rc-section-count { background: var(--purple-bg); color: var(--purple); }
   .rcs-new .rc-section-header { color: var(--green); border-left: 3px solid var(--green); }
-  .rcs-auto-lost .rc-section-header { color: var(--red); border-left: 3px solid var(--red); }
-  .rcs-auto-lost .rc-section-count { background: var(--red-bg); color: var(--red); }
-  .rcs-auto-expired .rc-section-header { color: var(--orange); border-left: 3px solid var(--orange); }
-  .rcs-auto-expired .rc-section-count { background: var(--orange-bg); color: var(--orange); }
   .rcs-new .rc-section-count { background: var(--green-bg); color: var(--green); }
   .rcs-restored .rc-section-header { color: var(--purple); border-left: 3px solid var(--purple); }
   .rcs-restored .rc-section-count { background: var(--purple-bg); color: var(--purple); }
@@ -813,13 +788,12 @@ const TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
 // TAB DEFINITIONS
 // ============================================================
 const STATUS_TABS = [
-  { id: 'in_stock',           label: 'In Stock',            color: 'green',  icon: '✓' },
-  { id: 'active_loans',       label: 'Active Loans',         color: 'blue',   icon: '↗' },
+  { id: 'in_stock',           label: 'In Stock',           color: 'green',  icon: '✓' },
+  { id: 'active_loans',       label: 'Active Loans',        color: 'blue',   icon: '↗' },
   { id: 'overdue',            label: 'Overdue',              color: 'yellow', icon: '⚠' },
   { id: 'lost_missing',       label: 'Lost / Missing',       color: 'red',    icon: '✕' },
   { id: 'sent_for_renewal',   label: 'Sent for Renewal',     color: 'teal',   icon: '↻' },
   { id: 'archived',           label: 'Archived',             color: 'orange', icon: '⊘' },
-  { id: 'mb_active',          label: 'MB Active Subs',       color: 'purple', icon: '📶' },
 ];
 const SUGGEST_TABS = [
   { id: 'to_be_reactivated', label: 'To Be Reactivated', color: 'purple', icon: '⟳' },
@@ -859,7 +833,6 @@ let state = {
 // ============================================================
 function getTabData(tabId) {
   if (tabId === 'sent_for_renewal') return state.hotspots.filter(h => h.sent_for_renewal);
-  if (tabId === 'mb_active')        return state.hotspots.filter(h => h.on_mb_active === true);
   return state.hotspots.filter(h => h.tabs.includes(tabId));
 }
 
@@ -1133,9 +1106,6 @@ function buildTable(data, tabId) {
   ];
   else if (tabId === 'sent_for_renewal') cols = [
     ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['phone','Phone'],['library','Library'],['exp_date','Current Exp'],['sub_status','Sub Status'],['renewal_sent_date','Sent Date'],['process_type','Process']
-  ];
-  else if (tabId === 'mb_active') cols = [
-    ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['phone','Phone'],['library','Library'],['exp_date','Sub Expires'],['sub_status','Sub Status'],['process_type','Process']
   ];
   else cols = [
     ['copy_num','Copy #'],['device_type','Type'],['barcode','Barcode'],['imei','IMEI'],['library','Library'],['lis_status','Status'],['process_type','Process'],['exp_date','Exp Date'],['sub_status','Sub']
@@ -1679,11 +1649,9 @@ function handleMBDeactivationFile(file) {
       if (h.sub_status === 'Deactivated') { alreadyDeact++; return; }
 
       // Mark as deactivated
-      const _prevSub = h.sub_status;
       h.sub_status    = 'Deactivated';
       h.mb_deactivated = true;
       h.last_mb_updated = true; // include in Alma export
-      h.on_mb_active = false;   // deactivated = no longer on MB active list
       recalcTabs(h);
       deactivated++;
       events.push({
@@ -1693,8 +1661,7 @@ function handleMBDeactivationFile(file) {
         device_type: h.device_type,
         library: h.library,
         desc: 'Deactivated by MB Deactivation Report',
-        oldVal: _prevSub || 'Active',
-        newVal: 'Deactivated',
+        detail: '',
       });
     });
 
@@ -2050,7 +2017,6 @@ function handleMBFile(file, resultTarget) {
             h.renewal_sent_date = null;
           }
           h.last_mb_updated = true; // flag for Alma export
-          h.on_mb_active = true;    // confirmed on MB active list via renewal report
           recalcTabs(h);
         }
         matched++;
@@ -2318,9 +2284,6 @@ function handleMBActiveFile(file, resultTarget) {
           if (ph && ph !== h.phone) { h.phone = ph; changed = true; }
         }
 
-        // Mark as on MB active list
-        h.on_mb_active = true;
-
         // If it was previously MB-deactivated, clear that flag
         if (h.mb_deactivated) {
           h.mb_deactivated = false;
@@ -2342,8 +2305,8 @@ function handleMBActiveFile(file, resultTarget) {
         if (changed) { recalcTabs(h); updated++; }
 
       } else {
-        // Device is NOT on MB active list — clear active flag and mark as deactivated
-        h.on_mb_active = false;
+        // Device is NOT on MB active list — mark as deactivated
+        // Only flag if not already deactivated/blocked
         if (h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
           changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
           h.sub_status = 'Deactivated';
@@ -2387,112 +2350,25 @@ function snapHotspot(h) {
 
 // Full deep-copy snapshot of ALL hotspots before any upload
 let _preUploadSnapshot = null;
-let _preUploadSnapshotId = null; // ID assigned before upload, used to save snapshot
-
 function takeSnapshot() {
   // Only snapshot if data has been fully loaded (prevents race condition on first load)
   if (!state.dataLoaded) {
     _preUploadSnapshot = null;
-    _preUploadSnapshotId = null;
     return;
   }
-  _preUploadSnapshot   = JSON.parse(JSON.stringify(state.hotspots));
-  _preUploadSnapshotId = Date.now(); // will be used as the record ID too
-}
-
-// Save a snapshot to the hotspot_snapshots table (called after upload completes)
-async function saveSnapshotToCloud(id, snapshot) {
-  if (!id || !snapshot) return;
-  try {
-    // Store as JSON text — each row is one snapshot, no combined size limit
-    const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_snapshots', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify({ id, data: JSON.stringify(snapshot) }),
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      console.warn('Snapshot save failed:', res.status, err);
-    }
-  } catch(e) {
-    console.warn('Snapshot save error:', e.message);
-  }
-}
-
-// Fetch a snapshot from the hotspot_snapshots table by ID
-async function loadSnapshotFromCloud(id) {
-  try {
-    const res = await fetch(
-      SUPABASE_URL + '/rest/v1/hotspot_snapshots?id=eq.' + id + '&select=data',
-      {
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': 'Bearer ' + SUPABASE_KEY,
-        },
-      }
-    );
-    if (res.ok) {
-      const rows = await res.json();
-      if (rows && rows.length && rows[0].data) {
-        return JSON.parse(rows[0].data);
-      }
-    }
-  } catch(e) {
-    console.warn('Snapshot load error:', e.message);
-  }
-  return null;
-}
-
-// Prune old snapshots from cloud (keep only IDs that still exist in changeHistory)
-async function pruneCloudSnapshots() {
-  const activeIds = new Set(state.changeHistory.map(r => r.id));
-  try {
-    // Fetch all snapshot IDs
-    const res = await fetch(
-      SUPABASE_URL + '/rest/v1/hotspot_snapshots?select=id',
-      {
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': 'Bearer ' + SUPABASE_KEY,
-        },
-      }
-    );
-    if (res.ok) {
-      const rows = await res.json();
-      for (const row of rows) {
-        if (!activeIds.has(row.id)) {
-          // Delete orphaned snapshot
-          await fetch(
-            SUPABASE_URL + '/rest/v1/hotspot_snapshots?id=eq.' + row.id,
-            {
-              method: 'DELETE',
-              headers: {
-                'apikey': SUPABASE_KEY,
-                'Authorization': 'Bearer ' + SUPABASE_KEY,
-              },
-            }
-          );
-        }
-      }
-    }
-  } catch(e) {
-    console.warn('Snapshot prune error:', e.message);
-  }
+  _preUploadSnapshot = JSON.parse(JSON.stringify(state.hotspots));
 }
 
 // Build structured events from LIS diff
 function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated, added) {
   const events = [];
 
+  // Guard: if no valid snapshot, nothing to diff — skip silently
   if (!_preUploadSnapshot || !Array.isArray(_preUploadSnapshot) || _preUploadSnapshot.length === 0) {
     return events;
   }
 
+  // Build lookup from pre-upload snapshot
   const prev = {};
   _preUploadSnapshot.forEach(h => { prev[h.barcode] = h; });
 
@@ -2501,8 +2377,10 @@ function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated
     const old = prev[b];
 
     if (!old) {
+      // Only flag as new if it was genuinely added via the New Devices upload handler,
+      // not just because the snapshot was missing. Since we guard above, this is safe.
       events.push({ type: 'new_device', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'New device added', oldVal: '—', newVal: h.device_type + ' · ' + (h.barcode || ''), why: 'This device was not previously in the inventory. It was added during this upload.' });
+        desc: `New device added (${h.device_type})`, detail: h.barcode });
       return;
     }
 
@@ -2511,166 +2389,107 @@ function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated
     const oldTabs = old.tabs || [];
     const newTabs = h.tabs || [];
 
-    // Checked out
-    if (oldProc !== 'loan' && newProc === 'loan') {
+    // ── Checked out (blank/in-place → loan) ──────────────────────────────
+    // Guard: must actually be on active_loans tab now (not overdue/lost)
+    if (oldProc !== 'loan' && newProc === 'loan' &&
+        newTabs.includes('active_loans') && !oldTabs.includes('active_loans')) {
       events.push({ type: 'checked_out', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Checked out',
-        oldVal: old.process_type || 'In Stock',
-        newVal: 'On Loan — due ' + (h.due_date || '—'),
-        why: "The Alma inventory report shows this device's process type changed to Loan with a new due date." });
+        desc: `Checked out`, detail: `Due: ${h.due_date || '—'}` });
     }
 
-    // Returned
+    // ── Returned (loan → blank/in-place) ─────────────────────────────────
     if (oldProc === 'loan' && !['loan','lost','missing','lost and paid','claimed returned'].includes(newProc)) {
-      const note = (h.sub_status === 'Deactivated' || h.sub_status === 'Blocked') ? ' (needs reactivation)' :
-                   h.sub_status === 'Expired' ? ' (sub expired)' : '';
+      const reason = h.sub_status === 'Deactivated' || h.sub_status === 'Blocked' ? ' — needs reactivation' :
+                     h.sub_status === 'Expired' ? ' — sub expired' : '';
       events.push({ type: 'returned', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Returned to library',
-        oldVal: 'On Loan — due ' + (old.due_date || '—'),
-        newVal: 'In Stock' + note,
-        why: "The Alma inventory report shows this device is now Item in place — it was returned to the library." });
+        desc: `Returned to library${reason}`, detail: `Was due: ${old.due_date || '—'}` });
     }
 
-    // Became overdue
+    // ── Newly overdue (any days) ──────────────────────────────────────────
     if (!oldTabs.includes('overdue') && newTabs.includes('overdue')) {
+      const urgency = h.days_overdue <= 10 ? '🔴 ' : h.days_overdue <= 30 ? '🟡 ' : '';
       events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Became overdue',
-        oldVal: 'On Loan — due ' + (h.due_date || '—'),
-        newVal: h.days_overdue + 'd past due',
-        why: "This device's due date has passed. It remains on loan past its return date." });
+        desc: `${urgency}Became overdue`, detail: `${h.days_overdue}d past due (${h.due_date})` });
     }
 
-    // Due date changed
+    // ── Due date changed (e.g. renewed loan) ─────────────────────────────
     if (old.due_date && h.due_date && old.due_date !== h.due_date && newProc === 'loan') {
       events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Due date updated',
-        oldVal: formatDate(old.due_date),
-        newVal: formatDate(h.due_date),
-        why: 'The Alma inventory report shows a new due date for this device.' });
+        desc: `Due date updated`, detail: `${old.due_date} → ${h.due_date}` });
     }
 
-    // Auto-converted to Lost (90+ days overdue)
-    if (oldProc === 'loan' && newProc === 'lost' && old.is_overdue && old.days_overdue >= 90) {
-      events.push({ type: 'auto_lost', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Auto-marked Lost — 90+ days overdue',
-        oldVal: 'Overdue ' + old.days_overdue + 'd (due ' + (old.due_date || '—') + ')',
-        newVal: 'Lost / Missing + To Deactivate',
-        why: 'This device was overdue for 90 or more days. Per library policy, it is automatically reclassified as Lost.' });
-
-    // Manually marked lost / missing
-    } else if (!['lost','missing','lost and paid','claimed returned'].includes(oldProc) &&
-               ['lost','missing','lost and paid','claimed returned'].includes(newProc)) {
+    // ── Moved to lost / missing ───────────────────────────────────────────
+    if (!['lost','missing','lost and paid','claimed returned'].includes(oldProc) &&
+        ['lost','missing','lost and paid','claimed returned'].includes(newProc)) {
       events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Marked ' + h.process_type,
-        oldVal: old.process_type || 'In Stock',
-        newVal: h.process_type,
-        why: 'The Alma inventory report shows the process type was changed to lost, missing, or claimed returned.' });
+        desc: `Marked ${h.process_type}`, detail: `Was: ${old.process_type || 'In stock'}` });
     }
 
-    // Subscription newly expired
-    if (old.sub_status !== 'Expired' && h.sub_status === 'Expired') {
-      const alreadyCovered = events.some(e => e.copy_num === h.copy_num && ['archived','auto_lost'].includes(e.type));
-      if (!alreadyCovered) {
-        events.push({ type: 'auto_expired', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-          desc: 'Subscription expired',
-          oldVal: old.sub_status || 'Active',
-          newVal: 'Expired (exp ' + (h.exp_date ? formatDate(h.exp_date) : '—') + ')',
-          why: 'The expiration date for this device has passed and no renewal has been recorded in Mobile Beacon.' });
-      }
-    }
-
-    // Recovered from lost/missing
+    // ── Recovered from lost/missing ───────────────────────────────────────
+    // Only fire if the device is genuinely no longer on the lost_missing tab.
+    // This prevents false positives when recalcTabs auto-corrects process_type
+    // (e.g. 90d-overdue auto-lost devices still appear on lost_missing tab).
     if (['lost','missing','lost and paid','claimed returned'].includes(oldProc) &&
-        !['lost','missing','lost and paid','claimed returned'].includes(newProc)) {
+        !['lost','missing','lost and paid','claimed returned'].includes(newProc) &&
+        !newTabs.includes('lost_missing')) {
       events.push({ type: 'returned', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Recovered from ' + old.process_type,
-        oldVal: old.process_type,
-        newVal: h.lis_status === 'Item in place' ? 'In Stock' : 'Active Loan',
-        why: 'The Alma inventory report shows this device is no longer marked as lost or missing.' });
+        desc: `Recovered — was ${old.process_type}`, detail: '' });
     }
 
-    // Moved to archive
+    // ── Moved to archive ──────────────────────────────────────────────────
     if (!oldTabs.includes('archived') && newTabs.includes('archived')) {
-      const reason = h.sub_status === 'Deactivated' ? 'Deactivated' :
-                     h.sub_status === 'Blocked'      ? 'Blocked'      :
-                     h.days_overdue >= 90             ? h.days_overdue + 'd overdue' :
+      const reason = (h.sub_status === 'Deactivated') ? 'Deactivated in description' :
+                     (h.sub_status === 'Blocked') ? 'Blocked in description' :
+                     (h.is_overdue && h.days_overdue >= 90) ? `${h.days_overdue}d overdue + expired` :
                      'Subscription expired';
-      const prevList = oldTabs.filter(t => t !== 'archived').join(', ') || 'Active';
       events.push({ type: 'archived', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-        desc: 'Moved to Archive',
-        oldVal: prevList,
-        newVal: 'Archived (' + reason + ')',
-        why: 'This device was moved to the archive because it was deactivated, blocked, or its subscription expired.' });
+        desc: `Moved to Archive`, detail: reason });
     }
 
-    // Subscription status changed
+    // ── Subscription status changed ───────────────────────────────────────
     if (old.sub_status !== h.sub_status) {
       const alreadyCovered = events.some(e => e.copy_num === h.copy_num && e.type === 'archived');
       if (!alreadyCovered && old.sub_status && h.sub_status) {
         events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-          desc: 'Subscription status',
-          oldVal: old.sub_status,
-          newVal: h.sub_status,
-          why: 'The subscription status changed, likely because the expiration date was updated or the device was deactivated via a Mobile Beacon report.' });
+          desc: `Subscription status changed`, detail: `${old.sub_status} → ${h.sub_status}` });
       }
     }
 
-    // LIS status changed
+    // ── LIS status changed (e.g. Item in place → Item not in place) ───────
     if (old.lis_status && h.lis_status && old.lis_status !== h.lis_status) {
       const alreadyCovered = events.some(e => e.copy_num === h.copy_num &&
         ['checked_out','returned','status_change'].includes(e.type));
       if (!alreadyCovered) {
         events.push({ type: 'status_change', copy_num: h.copy_num, barcode: h.barcode || '', device_type: h.device_type, library: h.library,
-          desc: 'Location status',
-          oldVal: old.lis_status,
-          newVal: h.lis_status,
-          why: "The Alma inventory report shows a change in this device's physical location status." });
+          desc: `Location status changed`, detail: `${old.lis_status} → ${h.lis_status}` });
       }
     }
   });
 
+  // ── Flagged archived-item returns ─────────────────────────────────────────
   flagged.forEach(f => {
     events.push({ type: 'returned', copy_num: null, device_type: '', library: '',
-      desc: f.replace(/<[^>]+>/g,''), oldVal: 'Archived', newVal: 'In Stock', why: 'The Alma inventory report shows this device is now "Item in place" — it was returned to the library.' });
+      desc: f.replace(/<[^>]+>/g,''), detail: 'Previously archived' });
   });
 
   return events;
 }
-function buildMBChangeEvents(rawChanges) {
-  // Also capture auto-expired events during this MB upload
-  const expiredEvents = [];
-  if (_preUploadSnapshot && Array.isArray(_preUploadSnapshot)) {
-    const prev = {};
-    _preUploadSnapshot.forEach(h => { prev[h.barcode] = h; });
-    state.hotspots.forEach(h => {
-      const old = prev[h.barcode];
-      if (old && old.sub_status !== 'Expired' && h.sub_status === 'Expired') {
-        expiredEvents.push({ type: 'auto_expired', copy_num: h.copy_num, barcode: h.barcode || '',
-          device_type: h.device_type, library: h.library,
-          desc: 'Subscription expired',
-          oldVal: old.sub_status || 'Active',
-          newVal: 'Expired',
-          why: 'The expiration date (' + (h.exp_date ? formatDate(h.exp_date) : '—') + ') has passed. Mobile Beacon has not recorded a renewal.' });
-      }
-    });
-  }
 
-  const renewalEvents = rawChanges.map(raw => {
+function buildMBChangeEvents(rawChanges) {
+  return rawChanges.map(raw => {
     const clean = raw.replace(/<[^>]+>/g, '');
+    // Parse: "c.X (IMEI Y) exp OLD → NEW"
     const m = clean.match(/c\.(\S+)\s+\(IMEI (\d+)\) exp (.+?) → (.+)/);
     if (m) {
       const h = state.hotspots.find(x => String(x.copy_num) === m[1]);
       return { type: 'renewed', copy_num: parseInt(m[1])||null,
         device_type: h ? h.device_type : '', library: h ? h.library : '',
         desc: 'Expiration date updated',
-        oldVal: m[3].trim(),
-        newVal: m[4].trim(),
-        why: 'This device appeared on the Mobile Beacon renewal report with an updated service plan end date.' };
+        detail: `${m[3].trim()} → ${m[4].trim()}` };
     }
     return { type: 'renewed', copy_num: null, device_type: '', library: '',
-      desc: clean, oldVal: null, newVal: null, why: '' };
+      desc: clean, detail: '' };
   });
-  return [...renewalEvents, ...expiredEvents];
 }
 
 function buildMBAChangeEvents(rawChanges, deactivated, updated) {
@@ -2682,28 +2501,20 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
       const cn = m ? parseInt(m[1]) : null;
       const h = state.hotspots.find(x => x.copy_num === cn);
       events.push({ type: 'restored', copy_num: cn, barcode: h ? (h.barcode||'') : '', device_type: h?h.device_type:'', library: h?h.library:'',
-        desc: 'Restored — now on MB active list',
-        oldVal: 'Deactivated',
-        newVal: 'Active',
-        why: "This device's IMEI was found on the Mobile Beacon active list after previously being marked deactivated." });
+        desc: 'Restored — now on MB active list', detail: '' });
     } else if (clean.includes('not on MB active list')) {
       const m = clean.match(/c\.(\d+)/);
       const cn = m ? parseInt(m[1]) : null;
       const h = state.hotspots.find(x => x.copy_num === cn);
       events.push({ type: 'deactivated_mb', copy_num: cn, barcode: h ? (h.barcode||'') : '', device_type: h?h.device_type:'', library: h?h.library:'',
-        desc: 'Deactivated — not on MB active list',
-        oldVal: h ? (h.sub_status || 'Active') : 'Active',
-        newVal: 'Deactivated',
-        why: "This device's IMEI was not found on the Mobile Beacon active list, indicating its service has been deactivated." });
+        desc: 'Deactivated — not on MB active list', detail: '' });
     } else if (clean.includes('exp updated')) {
       const m = clean.match(/c\.(\d+).+exp updated:\s*(.+?)\s*→\s*(.+)/);
       if (m) {
         const cn = parseInt(m[1]);
         const h = state.hotspots.find(x => x.copy_num === cn);
         events.push({ type: 'renewed', copy_num: cn, barcode: h ? (h.barcode||'') : '', device_type: h?h.device_type:'', library: h?h.library:'',
-          desc: 'Expiration date updated',
-          oldVal: m[2].trim(),
-          newVal: m[3].trim() });
+          desc: 'Expiration date updated', detail: `${m[2].trim()} → ${m[3].trim()}` });
       }
     }
   });
@@ -2711,140 +2522,11 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
 }
 
 // Record a completed upload into history
-// ============================================================
-// AUTOMATIC CHANGE DETECTION
-// Runs on load to detect hotspots that have crossed thresholds
-// (90+ days overdue → auto-lost, subscription expired) since last session.
-// Records these as change events in Recent Changes.
-// ============================================================
-function checkAutomaticChanges() {
-  // Step 1: Snapshot current saved state (before recalcTabs runs)
-  const prevState = {};
-  state.hotspots.forEach(h => {
-    prevState[h.barcode] = {
-      process_type: h.process_type,
-      sub_status:   h.sub_status,
-      tabs:         [...(h.tabs || [])],
-    };
-  });
-
-  // Step 2: Run recalcTabs on every hotspot — this may mutate process_type / sub_status / tabs
-  let anyMutation = false;
-  state.hotspots.forEach(h => {
-    const before = prevState[h.barcode];
-    recalcTabs(h);
-    if (h.process_type !== before.process_type ||
-        h.sub_status   !== before.sub_status) {
-      anyMutation = true;
-    }
-  });
-
-  // Step 3: Build events by comparing post-recalc state to pre-recalc snapshot
-  const autoEvents = [];
-  const allLoggedBarcodes = new Set(
-    state.changeHistory.flatMap(r => (r.events || []).map(e => e.barcode))
-  );
-
-  state.hotspots.forEach(h => {
-    const prev = prevState[h.barcode];
-    if (!prev) return;
-
-    const oldProc = (prev.process_type || '').toLowerCase().trim();
-    const newProc = (h.process_type   || '').toLowerCase().trim();
-    const oldSub  = prev.sub_status   || '';
-    const newSub  = h.sub_status      || '';
-
-    // Already logged for this barcode — skip (backfill guard)
-    const alreadyLogged = allLoggedBarcodes.has(h.barcode);
-
-    // Auto-lost: was a loan, now Lost, 90+ days overdue
-    if (!alreadyLogged &&
-        oldProc === 'loan' && newProc === 'lost' &&
-        h.days_overdue >= 90) {
-      autoEvents.push({
-        type: 'auto_lost',
-        copy_num: h.copy_num, barcode: h.barcode || '',
-        device_type: h.device_type, library: h.library,
-        desc: 'Auto-marked Lost — 90+ days overdue',
-        oldVal: 'Overdue ' + h.days_overdue + 'd (due ' + (h.due_date || '—') + ')',
-        newVal: 'Lost / Missing + To Deactivate',
-      });
-    }
-
-    // Backfill auto-lost: already Lost/Missing+To Deactivate with no history at all
-    if (!alreadyLogged &&
-        newProc === 'lost' &&
-        (h.tabs || []).includes('lost_missing') &&
-        (h.tabs || []).includes('to_deactivate') &&
-        h.due_date) {
-      autoEvents.push({
-        type: 'auto_lost',
-        copy_num: h.copy_num, barcode: h.barcode || '',
-        device_type: h.device_type, library: h.library,
-        desc: 'Automatically moved to Lost/Missing (backfilled)',
-        detail: `Was overdue 90+ days — due ${h.due_date}`,
-      });
-    }
-
-    // Auto-expired: sub_status newly became Expired
-    if (!alreadyLogged &&
-        oldSub !== 'Expired' && newSub === 'Expired' &&
-        !['Deactivated','Blocked'].includes(oldSub)) {
-      autoEvents.push({
-        type: 'auto_expired',
-        copy_num: h.copy_num, barcode: h.barcode || '',
-        device_type: h.device_type, library: h.library,
-        desc: 'Subscription automatically marked Expired',
-        detail: `Exp: ${h.exp_date ? formatDate(h.exp_date) : '—'}`,
-      });
-    }
-  });
-
-  // Step 4: Record change history if there are new events
-  if (autoEvents.length > 0) {
-    const record = {
-      id: Date.now(),
-      source: 'Automatic Daily Check',
-      date: new Date().toLocaleString(),
-      events: autoEvents,
-      profileId: null,
-      profileName: 'System',
-      profileColor: '#555d7a',
-      collapsed: false,
-      sectionState: {},
-      snapshot: null, // system checks are not undoable
-    };
-    state.changeHistory.unshift(record);
-    if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
-
-    const typeCounts = {};
-    autoEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
-    state.uploadHistory.unshift({
-      id: record.id,
-      date: record.date,
-      source: 'Automatic Daily Check',
-      profileId: null,
-      profileName: 'System',
-      profileColor: '#555d7a',
-      typeCounts,
-      totalEvents: autoEvents.length,
-    });
-    if (state.uploadHistory.length > 50) state.uploadHistory = state.uploadHistory.slice(0, 50);
-  }
-
-  // Step 5: Always save if recalcTabs mutated anything (persists process_type changes to DB)
-  if (anyMutation || autoEvents.length > 0) {
-    saveState();
-  }
-}
-
 function recordUpload(source, events) {
   if (!events || !events.length) return;
   const prof = state.profiles.find(p => p.id === state.activeProfileId);
-  // Use the ID assigned at takeSnapshot time so it matches the cloud snapshot row
-  const recordId = _preUploadSnapshotId || Date.now();
   const record = {
-    id: recordId,
+    id: Date.now(),
     source,
     date: new Date().toLocaleString(),
     events,
@@ -2853,13 +2535,8 @@ function recordUpload(source, events) {
     profileColor: prof ? prof.color : '#4f8ef7',
     collapsed: false,
     sectionState: {},
-    snapshot: _preUploadSnapshot, // kept in memory + localStorage for same-session undo
-    hasCloudSnapshot: !!_preUploadSnapshot, // flag so cross-browser undo knows to fetch
+    snapshot: _preUploadSnapshot, // full state before this upload — used for undo
   };
-  // Save snapshot to cloud asynchronously (don't block the upload flow)
-  if (_preUploadSnapshot) {
-    saveSnapshotToCloud(recordId, _preUploadSnapshot);
-  }
   state.changeHistory.unshift(record);
   if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
 
@@ -2885,29 +2562,17 @@ function recordUpload(source, events) {
   updateBadges();
 }
 
-async function undoUpload(id) {
+function undoUpload(id) {
   const idx = state.changeHistory.findIndex(r => r.id === id);
   if (idx === -1) { notify('Upload record not found', 'error'); return; }
   const record = state.changeHistory[idx];
-  const uploadNum = state.changeHistory.length - idx;
 
-  // If snapshot not in memory/localStorage, try fetching from cloud
   if (!record.snapshot) {
-    if (record.hasCloudSnapshot) {
-      notify('⟳ Fetching snapshot from cloud…', 'info');
-      const cloudSnap = await loadSnapshotFromCloud(id);
-      if (cloudSnap) {
-        record.snapshot = cloudSnap;
-      } else {
-        notify('Could not retrieve snapshot from cloud — cannot undo', 'error');
-        return;
-      }
-    } else {
-      notify('No snapshot available for this upload — cannot undo', 'error');
-      return;
-    }
+    notify('No snapshot available for this upload — cannot undo', 'error');
+    return;
   }
 
+  const uploadNum = state.changeHistory.length - idx;
   if (!confirm(`↩ Undo Upload #${uploadNum} (${record.source})\n\nThis will restore all hotspot data to how it looked before this upload was processed.\n\nAll uploads AFTER this one will also be removed from history.\n\nAre you sure?`)) return;
 
   // Restore the hotspot data from the snapshot
@@ -2915,10 +2580,9 @@ async function undoUpload(id) {
 
   // Remove this upload and all newer ones from both history arrays
   state.changeHistory = state.changeHistory.slice(idx + 1);
+  state.uploadHistory = state.uploadHistory.filter(h => h.id !== id && !state.changeHistory.every(r => r.id !== h.id));
+  // Simpler: just remove uploads that came at or after this record's timestamp
   state.uploadHistory = state.uploadHistory.filter(h => h.id < id);
-
-  // Prune orphaned cloud snapshots (fire and forget)
-  pruneCloudSnapshots();
 
   // Update upload counts on profiles
   state.profiles.forEach(p => {
@@ -2950,17 +2614,15 @@ function renderChanges() {
   }
 
   const SECTIONS = [
-    { key: 'checked_out',    label: 'Checked Out',              cls: 'rcs-checked-out' },
-    { key: 'returned',       label: 'Returned to Library',      cls: 'rcs-returned' },
-    { key: 'renewed',        label: 'Renewed / Exp Updated',    cls: 'rcs-renewed' },
-    { key: 'archived',       label: 'Moved to Archive',         cls: 'rcs-archived' },
-    { key: 'deactivated_mb', label: 'Deactivated by MB Recon',  cls: 'rcs-deactivated' },
-    { key: 'restored',       label: 'Restored (MB Recon)',      cls: 'rcs-restored' },
-    { key: 'auto_lost',      label: 'Auto-Moved to Lost/Missing (90+ days overdue)', cls: 'rcs-auto-lost' },
-    { key: 'auto_expired',   label: 'Auto-Marked Expired',      cls: 'rcs-auto-expired' },
-    { key: 'status_change',  label: 'Status Changes',           cls: 'rcs-status' },
+    { key: 'checked_out',    label: 'Checked Out',           cls: 'rcs-checked-out' },
+    { key: 'returned',       label: 'Returned to Library',   cls: 'rcs-returned' },
+    { key: 'renewed',        label: 'Renewed / Exp Updated', cls: 'rcs-renewed' },
+    { key: 'archived',       label: 'Moved to Archive',      cls: 'rcs-archived' },
+    { key: 'deactivated_mb', label: 'Deactivated by MB Recon', cls: 'rcs-deactivated' },
+    { key: 'restored',       label: 'Restored (MB Recon)',   cls: 'rcs-restored' },
+    { key: 'status_change',  label: 'Status Changes',        cls: 'rcs-status' },
     { key: 'sent_for_renewal', label: 'Sent for Renewal',       cls: 'rcs-teal' },
-    { key: 'new_device',       label: 'New Devices Added',      cls: 'rcs-new' },
+    { key: 'new_device',       label: 'New Devices Added',     cls: 'rcs-new' },
   ];
 
   let html = `<div class="rc-header">
@@ -2979,7 +2641,7 @@ function renderChanges() {
     record.events.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0)+1; });
 
 
-    const hasSnapshot = !!record.snapshot || !!record.hasCloudSnapshot;
+    const hasSnapshot = !!record.snapshot;
     html += `<div class="rc-upload-block">
       <div class="rc-upload-header ${hdrClass}" onclick="toggleRCBlock(${ri})">
         <span class="rc-upload-title">Upload #${state.changeHistory.length - ri} &nbsp;·&nbsp; ${record.source}</span>
@@ -3006,27 +2668,15 @@ function renderChanges() {
         </div>
         <div class="rc-section-items ${secBody}">`;
 
-      items.forEach((ev, evIdx) => {
+      items.forEach(ev => {
         const typeClass = ev.device_type === 'T10' ? 'badge-blue' : ev.device_type === 'T9' ? 'badge-purple' : 'badge-gray';
         const rcBarcode = ev.barcode || '';
-        const hasChange = ev.oldVal != null || ev.newVal != null;
-        const changeHtml = hasChange
-          ? `<span class="old">${ev.oldVal ?? '—'}</span><span class="arrow">→</span><span class="new">${ev.newVal ?? '—'}</span>`
-          : (ev.detail ? `<span style="color:var(--orange);font-style:italic">${ev.detail}</span>` : '');
-        const whySafe = (ev.why || '').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
-        const whyBtn = ev.why
-          ? `<button class="rc-why-btn" onclick="event.stopPropagation();showWhyPopover(this,'${whySafe}')">Why?</button>`
-          : '';
-        html += `<div class="rc-item${rcBarcode ? ' clickable' : ''}" ${rcBarcode ? `onclick="showDetail('${ev.barcode}')"` : ''}>
+        html += `<div class="rc-item clickable" ${rcBarcode ? `onclick="showDetail('${ev.barcode}')"` : ''} style="${rcBarcode ? 'cursor:pointer' : ''}">
           <span class="rc-item-copy">${ev.copy_num ? 'c. ' + ev.copy_num : '—'}</span>
           <span class="rc-item-type">${ev.device_type ? '<span class="badge ' + typeClass + '">' + ev.device_type + '</span>' : ''}</span>
           <span class="rc-item-barcode" title="${ev.barcode || ''}">${ev.barcode ? ev.barcode.slice(-8) : '—'}</span>
-          <div class="rc-item-main">
-            <span class="rc-item-desc">${ev.desc}</span>
-            ${changeHtml ? `<span class="rc-item-change">${changeHtml}</span>` : ''}
-          </div>
+          <span class="rc-item-desc">${ev.desc}${ev.detail ? ' <span class="reason">— ' + ev.detail + '</span>' : ''}</span>
           <span class="rc-item-lib">${ev.library ? libBadge(ev.library) : ''}</span>
-          ${whyBtn}
         </div>`;
       });
 
@@ -3272,35 +2922,6 @@ function showDetail(barcode) {
 
 function closeDetail() {
   document.getElementById('detail-overlay').classList.add('hidden');
-}
-
-function showWhyPopover(btn, why) {
-  closeWhyPopover();
-  const pop = document.getElementById('rc-why-popover');
-  document.getElementById('rc-why-popover-body').textContent = why || 'No reason recorded.';
-  pop.classList.add('visible');
-  // Position near the button
-  const rect = btn.getBoundingClientRect();
-  const popW = 340, popH = 120;
-  let left = rect.left;
-  let top = rect.bottom + 6;
-  if (left + popW > window.innerWidth - 12) left = window.innerWidth - popW - 12;
-  if (top + popH > window.innerHeight - 12) top = rect.top - popH - 6;
-  pop.style.left = left + 'px';
-  pop.style.top = top + 'px';
-  // Close on outside click
-  setTimeout(() => {
-    document.addEventListener('click', _whyOutsideHandler);
-  }, 10);
-}
-function _whyOutsideHandler(e) {
-  const pop = document.getElementById('rc-why-popover');
-  if (!pop.contains(e.target)) closeWhyPopover();
-}
-function closeWhyPopover() {
-  const pop = document.getElementById('rc-why-popover');
-  if (pop) pop.classList.remove('visible');
-  document.removeEventListener('click', _whyOutsideHandler);
 }
 
 // ============================================================
@@ -3686,13 +3307,11 @@ function renderHistory() {
   const TYPE_LABELS = {
     checked_out: 'Checked out', returned: 'Returned', renewed: 'Renewed',
     archived: 'Archived', deactivated_mb: 'Deactivated (MB)', restored: 'Restored (MB)',
-    auto_lost: 'Auto-lost (90d+)', auto_expired: 'Auto-expired',
     status_change: 'Status changed', new_device: 'New device', sent_for_renewal: 'Sent for renewal',
   };
   const TYPE_COLORS = {
     checked_out: 'var(--accent)', returned: 'var(--green)', renewed: 'var(--yellow)',
     archived: 'var(--orange)', deactivated_mb: 'var(--red)', restored: 'var(--purple)',
-    auto_lost: 'var(--red)', auto_expired: 'var(--orange)',
     status_change: 'var(--purple)', new_device: 'var(--green)', sent_for_renewal: 'var(--teal)',
   };
 
@@ -3805,9 +3424,8 @@ async function saveState() {
   // Always write full state (with snapshots) to localStorage for undo support
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)); } catch(e) {}
 
-  // For Supabase: strip snapshots entirely — they're large (~178KB each) and would
-  // cause the save to fail. Snapshots are stored in localStorage only, on the same
-  // machine where uploads happen. Undo works within a session or same browser.
+  // For Supabase: strip snapshots entirely — each is ~178KB and causes save failures.
+  // Snapshots are stored in localStorage only (same machine/browser).
   const changeHistoryCloud = state.changeHistory.map(r => {
     const { snapshot, ...rest } = r;
     return rest;
@@ -3874,27 +3492,32 @@ async function loadState() {
         state.uploadHistory   = saved.uploadHistory   || [];
         state.lastUpdated     = saved.lastUpdated      || state.lastUpdated;
         state.overrideRules   = saved.overrideRules   || [];
-        // Snapshots are NOT stored in Supabase (too large — would cause save failures).
-        // Restore them from localStorage if available (same browser/machine).
+        // Snapshots are not stored in Supabase (too large).
+        // Restore them from localStorage if available (same browser).
         try {
           const localRaw = localStorage.getItem(STORAGE_KEY);
           if (localRaw) {
             const localSaved = JSON.parse(localRaw);
             if (localSaved.changeHistory) {
-              const localSnapshotMap = {};
+              const localSnapMap = {};
               localSaved.changeHistory.forEach(r => {
-                if (r.snapshot) localSnapshotMap[r.id] = r.snapshot;
+                if (r.snapshot) localSnapMap[r.id] = r.snapshot;
               });
               state.changeHistory.forEach(r => {
-                if (!r.snapshot && localSnapshotMap[r.id]) {
-                  r.snapshot = localSnapshotMap[r.id];
-                }
+                if (!r.snapshot && localSnapMap[r.id]) r.snapshot = localSnapMap[r.id];
               });
             }
           }
         } catch {}
-        // Always also write Supabase data to localStorage so it stays in sync
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify({hotspots:state.hotspots,profiles:state.profiles,activeProfileId:state.activeProfileId,changeHistory:state.changeHistory,uploadHistory:state.uploadHistory,lastUpdated:state.lastUpdated,overrideRules:state.overrideRules})); } catch {}
+        // Write Supabase data back to localStorage to keep them in sync
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            hotspots: state.hotspots, profiles: state.profiles,
+            activeProfileId: state.activeProfileId,
+            changeHistory: state.changeHistory, uploadHistory: state.uploadHistory,
+            lastUpdated: state.lastUpdated, overrideRules: state.overrideRules || [],
+          }));
+        } catch {}
         console.log('✓ Loaded from Supabase (' + saved.hotspots.length + ' devices)');
         return true;
       }
@@ -3928,7 +3551,6 @@ function resetToBaseline() {
   if (!confirm('⚠️ This will erase ALL uploaded data, profiles, and change history, and restore the original baseline inventory.\n\nThis cannot be undone. Are you sure?')) return;
   localStorage.removeItem(STORAGE_KEY);
   // Also clear Supabase
-  // Clear main state row
   fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main', {
     method: 'PATCH',
     headers: {
@@ -3938,14 +3560,6 @@ function resetToBaseline() {
       'Prefer': 'return=minimal',
     },
     body: JSON.stringify({ data: {}, updated_at: new Date().toISOString() }),
-  });
-  // Delete all snapshots from cloud
-  fetch(SUPABASE_URL + '/rest/v1/hotspot_snapshots?id=gt.0', {
-    method: 'DELETE',
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + SUPABASE_KEY,
-    },
   }).finally(() => location.reload());
 }
 
@@ -3959,9 +3573,10 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   await loadState();
   state.dataLoaded = true; // mark data as ready for snapshotting
 
-  // Check for automatic status changes (90d overdue → Lost, expired subs)
-  // and record them in Recent Changes before recalculating tabs.
-  checkAutomaticChanges();
+  // Recalculate tabs, overdue counts, and expiry status for every hotspot
+  // using today's real date. This ensures days-overdue and expired flags
+  // are always current, not frozen at the time of the last file upload.
+  state.hotspots.forEach(h => recalcTabs(h));
 
   // Clean up any bad upload records where ALL events are false new_device floods
   state.changeHistory = state.changeHistory.filter(r => {
