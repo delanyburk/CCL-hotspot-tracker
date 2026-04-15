@@ -2875,14 +2875,42 @@ function renderChanges() {
         <div class="rc-section-items ${secBody}">`;
 
       items.forEach(ev => {
-        const typeClass = ev.device_type === 'T10' ? 'badge-blue' : ev.device_type === 'T9' ? 'badge-purple' : 'badge-gray';
-        const rcBarcode = ev.barcode || '';
-        html += `<div class="rc-item clickable" ${rcBarcode ? `onclick="showDetail('${ev.barcode}')"` : ''} style="${rcBarcode ? 'cursor:pointer' : ''}">
-          <span class="rc-item-copy">${ev.copy_num ? 'c. ' + ev.copy_num : '—'}</span>
-          <span class="rc-item-type">${ev.device_type ? '<span class="badge ' + typeClass + '">' + ev.device_type + '</span>' : ''}</span>
-          <span class="rc-item-barcode" title="${ev.barcode || ''}">${ev.barcode ? ev.barcode.slice(-8) : '—'}</span>
-          <span class="rc-item-desc">${ev.desc}${ev.detail ? ' <span class="reason">— ' + ev.detail + '</span>' : ''}</span>
-          <span class="rc-item-lib">${ev.library ? libBadge(ev.library) : ''}</span>
+        // Resolve missing fields at render time — fixes old stored events regardless of what's in DB
+        // Step 1: extract copy_num from desc if missing (old flagged events: "⟳ c.260 — ...")
+        let evCopyNum = ev.copy_num;
+        let evBarcode = ev.barcode || '';
+        let evDevType = ev.device_type || '';
+        let evLibrary = ev.library || '';
+        let evDesc    = ev.desc || '';
+        let evDetail  = ev.detail || '';
+
+        if (evCopyNum == null && evDesc) {
+          const m = evDesc.match(/c\.?(\d+)/);
+          if (m) evCopyNum = parseInt(m[1]);
+        }
+        // Clean up old desc formats
+        if (evDesc.startsWith('⟳ ')) evDesc = evDesc.slice(2);
+        if (evDesc.includes('archived item returned to library')) {
+          evDesc = 'Returned to library';
+          if (!evDetail) evDetail = 'Was previously archived';
+        }
+        // Step 2: fill in barcode/device_type/library from live hotspot data if missing
+        if ((!evBarcode || !evDevType || !evLibrary) && evCopyNum != null) {
+          const liveH = state.hotspots.find(x => x.copy_num === evCopyNum);
+          if (liveH) {
+            if (!evBarcode) evBarcode = liveH.barcode     || '';
+            if (!evDevType) evDevType = liveH.device_type || '';
+            if (!evLibrary) evLibrary = liveH.library     || '';
+          }
+        }
+
+        const typeClass = evDevType === 'T10' ? 'badge-blue' : evDevType === 'T9' ? 'badge-purple' : 'badge-gray';
+        html += `<div class="rc-item clickable" ${evBarcode ? `onclick="showDetail('${evBarcode}')"` : ''} style="${evBarcode ? 'cursor:pointer' : ''}">
+          <span class="rc-item-copy">${evCopyNum ? 'c. ' + evCopyNum : '—'}</span>
+          <span class="rc-item-type">${evDevType ? '<span class="badge ' + typeClass + '">' + evDevType + '</span>' : ''}</span>
+          <span class="rc-item-barcode" title="${evBarcode}">${evBarcode ? evBarcode.slice(-8) : '—'}</span>
+          <span class="rc-item-desc">${evDesc}${evDetail ? ' <span class="reason">— ' + evDetail + '</span>' : ''}</span>
+          <span class="rc-item-lib">${evLibrary ? libBadge(evLibrary) : ''}</span>
         </div>`;
       });
 
@@ -3814,14 +3842,17 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
 
   // Backfill barcodes into any stored events that are missing them.
   // This fixes events saved before barcode was added — old uploads stay clickable.
+  // Fix any stored events missing barcode/copy_num — then save so it persists.
+  let _patchMadeChanges = false;
   (function patchStoredEvents() {
     const byCopyNum = {};
     state.hotspots.forEach(h => { if (h.copy_num != null) byCopyNum[h.copy_num] = h; });
     state.changeHistory.forEach(record => {
       (record.events || []).forEach(ev => {
-        // STEP 1: extract copy_num from raw desc BEFORE any normalization wipes it.
-        // Old flagged events stored desc like "⟳ c.260 — archived item returned to library!"
-        // We must grab the number before cleaning the string.
+        const before = JSON.stringify({b: ev.barcode, c: ev.copy_num, d: ev.desc});
+
+        // STEP 1: extract copy_num from raw desc BEFORE normalization wipes it
+        // Old flagged events: "⟳ c.260 — archived item returned to library!"
         if (ev.copy_num == null && ev.desc) {
           const m = ev.desc.match(/c\.?(\d+)/);
           if (m) ev.copy_num = parseInt(m[1]);
@@ -3840,14 +3871,19 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
         if (!ev.barcode && ev.copy_num != null) {
           const h = byCopyNum[ev.copy_num];
           if (h) {
-            ev.barcode     = h.barcode                      || '';
+            ev.barcode     = h.barcode                       || '';
             ev.device_type = ev.device_type || h.device_type || '';
             ev.library     = ev.library     || h.library     || '';
           }
         }
+
+        const after = JSON.stringify({b: ev.barcode, c: ev.copy_num, d: ev.desc});
+        if (before !== after) _patchMadeChanges = true;
       });
     });
   })();
+  // If any events were patched, save immediately so Supabase has the fixed version
+  if (_patchMadeChanges) saveState();
 
   // Recalculate tabs, overdue counts, and expiry status for every hotspot
   // using today's real date. This ensures days-overdue and expired flags
