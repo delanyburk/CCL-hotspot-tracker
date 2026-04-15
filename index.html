@@ -2161,7 +2161,7 @@ function handleMBFile(file, resultTarget) {
 
     // Find IMEI column and plan end date column
     const sample = rows[0] || {};
-    const imeiCol = Object.keys(sample).find(k => /imei/i.test(k));
+    const imeiCol = Object.keys(sample).find(k => /imei|serial.?number|serial.?num/i.test(k));
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
     const phoneCol = Object.keys(sample).find(k => /phone|msisdn|number/i.test(k));
 
@@ -2407,8 +2407,8 @@ function handleMBActiveFile(file, resultTarget) {
     const sample = rows[0] || {};
 
     // Find IMEI column
-    const imeiCol = Object.keys(sample).find(k => /imei/i.test(k));
-    if (!imeiCol) { showResult(mbResultId, '❌ Could not find IMEI column in this file.', 'error'); return; }
+    const imeiCol = Object.keys(sample).find(k => /imei|serial.?number|serial.?num/i.test(k));
+    if (!imeiCol) { showResult(mbResultId, '❌ Could not find IMEI or Serial Number column in this file.', 'error'); return; }
 
     // Find optional columns
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
@@ -2884,18 +2884,21 @@ function renderChanges() {
         let evDesc    = ev.desc || '';
         let evDetail  = ev.detail || '';
 
-        if (evCopyNum == null && evDesc) {
-          const m = evDesc.match(/c\.?(\d+)/);
-          if (m) evCopyNum = parseInt(m[1]);
-        }
-        // Clean up old desc formats
+        // Step 1: clean up old desc formats
         if (evDesc.startsWith('⟳ ')) evDesc = evDesc.slice(2);
         if (evDesc.includes('archived item returned to library')) {
           evDesc = 'Returned to library';
           if (!evDetail) evDetail = 'Was previously archived';
         }
-        // Step 2: fill in barcode/device_type/library from live hotspot data if missing
-        if ((!evBarcode || !evDevType || !evLibrary) && evCopyNum != null) {
+        // Step 2: extract copy_num from desc if still missing
+        // Must happen AFTER desc cleanup — old desc had "⟳ c.260 — archived..."
+        // but if a previous save already wiped it to "Returned to library", this won't help
+        if (evCopyNum == null && evDesc) {
+          const m = evDesc.match(/c\.?(\d+)/);
+          if (m) evCopyNum = parseInt(m[1]);
+        }
+        // Step 3: fill in barcode/device_type/library from live hotspot data
+        if (evCopyNum != null && (!evBarcode || !evDevType || !evLibrary)) {
           const liveH = state.hotspots.find(x => x.copy_num === evCopyNum);
           if (liveH) {
             if (!evBarcode) evBarcode = liveH.barcode     || '';
@@ -2904,6 +2907,19 @@ function renderChanges() {
           }
         }
 
+        // Skip permanently broken events (copy_num and barcode both unrecoverable)
+        if (!evCopyNum && !evBarcode && evDesc === 'Returned to library') {
+          // These are old events whose copy number was lost in a previous save.
+          // Show them with a note rather than broken dashes.
+          html += `<div class="rc-item" style="opacity:0.5;font-style:italic">
+            <span class="rc-item-copy">—</span>
+            <span class="rc-item-type"></span>
+            <span class="rc-item-barcode"></span>
+            <span class="rc-item-desc">Returned to library <span class="reason">— Previously archived (details unavailable)</span></span>
+            <span class="rc-item-lib"></span>
+          </div>`;
+          return;
+        }
         const typeClass = evDevType === 'T10' ? 'badge-blue' : evDevType === 'T9' ? 'badge-purple' : 'badge-gray';
         html += `<div class="rc-item clickable" ${evBarcode ? `onclick="showDetail('${evBarcode}')"` : ''} style="${evBarcode ? 'cursor:pointer' : ''}">
           <span class="rc-item-copy">${evCopyNum ? 'c. ' + evCopyNum : '—'}</span>
