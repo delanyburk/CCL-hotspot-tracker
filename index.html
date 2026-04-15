@@ -3812,6 +3812,33 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   await loadState();
   state.dataLoaded = true; // mark data as ready for snapshotting
 
+  // Backfill barcodes into any stored events that are missing them.
+  // This fixes events saved before barcode was added — old uploads stay clickable.
+  (function patchStoredEvents() {
+    const byCopyNum = {};
+    state.hotspots.forEach(h => { if (h.copy_num != null) byCopyNum[h.copy_num] = h; });
+    state.changeHistory.forEach(record => {
+      (record.events || []).forEach(ev => {
+        // Fill in missing barcode/device_type/library from current hotspot data
+        if (!ev.barcode && ev.copy_num != null) {
+          const h = byCopyNum[ev.copy_num];
+          if (h) {
+            ev.barcode     = h.barcode     || '';
+            ev.device_type = ev.device_type || h.device_type || '';
+            ev.library     = ev.library     || h.library     || '';
+          }
+        }
+        // Clean up old ⟳ prefix in desc
+        if (ev.desc && ev.desc.startsWith('⟳ ')) ev.desc = ev.desc.slice(2);
+        // Normalize old "archived item returned to library!" → clean format
+        if (ev.desc && ev.desc.includes('archived item returned to library')) {
+          ev.desc   = 'Returned to library';
+          if (!ev.detail) ev.detail = 'Was previously archived';
+        }
+      });
+    });
+  })();
+
   // Recalculate tabs, overdue counts, and expiry status for every hotspot
   // using today's real date. This ensures days-overdue and expired flags
   // are always current, not frozen at the time of the last file upload.
