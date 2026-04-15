@@ -1555,8 +1555,8 @@ function renderUpload() {
         <div class="report-card-icon">📋</div>
         <div class="report-card-info">
           <div class="report-card-title">Alma Bulk Update — Expiration Dates &amp; Deactivations</div>
-          <div class="report-card-desc">Generates an Excel file for all hotspots whose expiration dates or deactivation status changed in the most recent Mobile Beacon upload. Formatted exactly as Alma expects: barcode · internal_note_1 (IMEI) · internal_note_2 (phone) · internal_note_3 (exp date or "Deactivated") · description (updated copy # + exp).</div>
-          <div class="report-card-count" id="alma-report-count" onclick="showPendingAlmaUpdates()" style="cursor:pointer;text-decoration:underline" title="Click to see pending updates">—</div>
+          <div class="report-card-desc">Generates an Excel file for the complete inventory with up-to-date expiration dates and statuses for every hotspot. Formatted exactly as Alma expects: barcode · internal_note_1 (IMEI) · internal_note_2 (phone) · internal_note_3 (exp date or "Deactivated") · description (copy # + exp).</div>
+          <div class="report-card-count" id="alma-report-count" onclick="showRecentAlmaUpdates()" style="cursor:pointer;text-decoration:underline;color:var(--accent)" title="Click to see recent Alma-relevant changes">View recent Alma updates →</div>
         </div>
         <button class="btn-primary" onclick="generateAlmaReport()" style="flex-shrink:0;margin-left:12px">⬇ Generate</button>
       </div>
@@ -1564,13 +1564,7 @@ function renderUpload() {
 
 `;
   // Update the Alma report count after render
-  setTimeout(() => {
-    const changed = state.hotspots.filter(h => h.last_mb_updated).length;
-    const el = document.getElementById('alma-report-count');
-    if (el) el.textContent = changed > 0
-      ? changed + ' device' + (changed !== 1 ? 's' : '') + ' have pending Alma updates'
-      : 'No pending updates — upload a Mobile Beacon file first';
-  }, 0);
+  // (alma-report-count now shows static link text set in HTML)
 }
 
 // ============================================================
@@ -1671,25 +1665,31 @@ function handleMBInvoicePDF(file) {
       const imeiMap = {};
       state.hotspots.forEach(h => { if (h.imei) imeiMap[h.imei] = h; });
 
-      const changes = [];
+      const events = [];
       let updated = 0, unmatched = 0;
 
       renewals.forEach(({ imei, exp_date }) => {
         const h = imeiMap[imei];
         if (!h) {
           unmatched++;
-          changes.push('IMEI ' + imei + ' — <span class="ch-old">not found in inventory</span>');
           return;
         }
         const oldExp = h.exp_date || 'none';
         if (exp_date !== oldExp) {
-          changes.push('c.' + h.copy_num + ' (IMEI ' + imei + ') exp <span class="ch-old">' +
-            (oldExp || 'none') + '</span> → <span class="ch-new">' + exp_date + '</span>');
+          // Build a structured event directly — no string parsing needed
+          events.push({
+            type: 'renewed',
+            copy_num: h.copy_num,
+            barcode: h.barcode || '',
+            device_type: h.device_type || '',
+            library: h.library || '',
+            desc: 'Expiration date updated',
+            detail: (oldExp || 'none') + ' → ' + exp_date,
+          });
           h.exp_date = exp_date;
           h.sub_status = new Date(exp_date) > TODAY ? 'Active' : 'Expired';
           h.last_mb_updated = true;
           h.on_mb_active = true;
-          // Clear sent_for_renewal if this renewal confirms the new date
           if (h.sent_for_renewal) {
             h.sent_for_renewal = false;
             h.renewal_sent_date = null;
@@ -1699,10 +1699,10 @@ function handleMBInvoicePDF(file) {
         }
       });
 
-      state.changeLog = changes;
+      state.changeLog = [];
       state.lastUpdated = new Date().toLocaleDateString();
       document.getElementById('footer-date').textContent = state.lastUpdated;
-      recordUpload('MB Invoice PDF (Renewal)', buildMBChangeEvents(changes));
+      recordUpload('MB Invoice PDF (Renewal)', events);
       updateBadges();
       saveState();
 
@@ -1804,21 +1804,11 @@ function handleMBDeactivationFile(file) {
 // ============================================================
 // ALMA BULK UPDATE REPORT GENERATOR
 // ============================================================
-function generateAlmaReport(regenerate) {
-  // If regenerating, restore last report's pending list
-  let pending;
-  if (regenerate && state.lastAlmaReport) {
-    // Re-fetch current hotspot data for the same barcodes
-    const lastBarcodes = new Set(state.lastAlmaReport.devices.map(d => d.barcode));
-    pending = state.hotspots.filter(h => lastBarcodes.has(h.barcode));
-    if (!pending.length) { notify('No devices found from last report', 'error'); return; }
-  } else {
-    pending = state.hotspots.filter(h => h.last_mb_updated);
-    if (!pending.length) {
-      notify('No pending Alma updates — upload a Mobile Beacon file first', 'error');
-      return;
-    }
-  }
+function generateAlmaReport() {
+  // Always include ALL hotspots with their current up-to-date info.
+  // Sorted by copy number for easy reading.
+  const allHotspots = [...state.hotspots].sort((a, b) => (a.copy_num || 0) - (b.copy_num || 0));
+  if (!allHotspots.length) { notify('No devices in inventory', 'error'); return; }
 
   loadSheetJS(() => {
     function fmtExp(dateStr) {
@@ -1849,13 +1839,16 @@ function generateAlmaReport(regenerate) {
       return prefix + ' exp ' + fmtExp(h.exp_date);
     }
 
-    const rows = pending.map(h => ({
+    const rows = allHotspots.map(h => ({
       barcode:         h.barcode || '',
       internal_note_1: h.imei   || '',
       internal_note_2: h.phone  || '',
-      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked') ? 'Deactivated' :
-                       h.sub_status === 'Expired' ? fmtExp(h.exp_date) + ' (Expired)' : fmtExp(h.exp_date),
-      description:     buildDesc(h),
+      internal_note_3: (h.mb_deactivated || h.sub_status === 'Deactivated' || h.sub_status === 'Blocked')
+                         ? 'Deactivated'
+                         : h.sub_status === 'Expired'
+                           ? fmtExp(h.exp_date) + ' (Expired)'
+                           : fmtExp(h.exp_date),
+      description: buildDesc(h),
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -1867,40 +1860,68 @@ function generateAlmaReport(regenerate) {
     const today = _t.getFullYear() + '-' + String(_t.getMonth()+1).padStart(2,'0') + '-' + String(_t.getDate()).padStart(2,'0');
     XLSX.writeFile(wb, 'alma_bulk_update_' + today + '.xlsx');
 
-    if (!regenerate) {
-      // Store this report for verification and regeneration
-      const reportRecord = {
-        id: Date.now(),
-        date: new Date().toLocaleString(),
-        devices: pending.map(h => ({
-          barcode: h.barcode, copy_num: h.copy_num, imei: h.imei,
-          exp_date: h.exp_date, sub_status: h.sub_status,
-          description: buildDesc(h),
-        })),
-      };
-      state.lastAlmaReport = reportRecord;
-      state.almaReportHistory = [reportRecord, ...(state.almaReportHistory || [])].slice(0, 5);
-
-      // Clear the last_mb_updated flags
-      pending.forEach(h => { h.last_mb_updated = false; });
-    }
-
     saveState();
     updateBadges();
     if (state.page === 'upload') renderUpload();
-    notify('Alma report generated — ' + rows.length + ' records exported' + (regenerate ? ' (regenerated)' : ''), 'success');
+    notify('Alma report generated — ' + rows.length + ' devices exported', 'success');
   });
 }
 
-function showPendingAlmaUpdates() {
-  const pending = state.hotspots.filter(h => h.last_mb_updated);
-  if (!pending.length) { notify('No pending updates', 'info'); return; }
-  const lines = pending.map(h => {
-    const sub = h.sub_status === 'Deactivated' || h.sub_status === 'Blocked' ? ' (Deactivated)' :
-                h.sub_status === 'Expired' ? ' (Expired)' : '';
-    return 'c.' + h.copy_num + ' — exp ' + (h.exp_date || 'n/a') + sub;
-  }).join('\n');
-  alert('Pending Alma Updates (' + pending.length + '):\n\n' + lines);
+function showRecentAlmaUpdates() {
+  // Show a modal with recent exp/status changes grouped by date (last 180 days)
+  const cutoff = Date.now() - (180 * 24 * 60 * 60 * 1000);
+  const ALMA_TYPES = new Set(['renewed', 'deactivated_mb', 'auto_expired', 'archived']);
+
+  // Gather relevant events from changeHistory
+  const byDate = {};
+  state.changeHistory.forEach(record => {
+    const recMs = new Date(record.date).getTime();
+    if (recMs < cutoff) return;
+    (record.events || []).forEach(ev => {
+      if (!ALMA_TYPES.has(ev.type)) return;
+      const dateKey = record.date.split(',')[0]; // just the date portion
+      if (!byDate[dateKey]) byDate[dateKey] = { date: record.date, source: record.source, items: [] };
+      byDate[dateKey].items.push(ev);
+    });
+  });
+
+  const dates = Object.keys(byDate).sort((a, b) => new Date(b) - new Date(a));
+
+  // Build modal content
+  let html = '<div style="max-height:70vh;overflow-y:auto;padding:4px 0">';
+  if (!dates.length) {
+    html += '<div style="color:var(--text3);font-family:DM Mono,monospace;font-size:12px;padding:12px 0">No Alma-relevant changes in the last 180 days.</div>';
+  } else {
+    dates.forEach(dateKey => {
+      const group = byDate[dateKey];
+      html += '<div style="margin-bottom:16px">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--accent);font-family:DM Mono,monospace;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border)">' +
+        group.date + ' &nbsp;·&nbsp; ' + group.source + '</div>';
+      group.items.forEach(ev => {
+        const badge = ev.device_type === 'T10'
+          ? '<span class="badge badge-blue">T10</span>'
+          : ev.device_type === 'T9'
+            ? '<span class="badge badge-purple">T9</span>' : '';
+        const detail = ev.detail ? ' <span style="color:var(--text3)">— ' + ev.detail + '</span>' : '';
+        html += '<div style="display:grid;grid-template-columns:56px 56px 1fr;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px">' +
+          '<span style="font-weight:700;font-family:Syne,sans-serif">' + (ev.copy_num ? 'c. ' + ev.copy_num : '—') + '</span>' +
+          '<span>' + badge + '</span>' +
+          '<span style="font-family:DM Mono,monospace;color:var(--text2)">' + ev.desc + detail + '</span>' +
+          '</div>';
+      });
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  // Reuse the detail modal for display
+  document.getElementById('detail-modal-content').innerHTML =
+    '<div class="detail-modal-header">' +
+    '<div class="detail-modal-title">Recent Alma Updates</div>' +
+    '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace">Changes in the last 180 days relevant to Alma</div>' +
+    '<button class="detail-close" onclick="closeDetail()">✕</button>' +
+    '</div>' + html;
+  document.getElementById('detail-overlay').classList.remove('hidden');
 }
 
 // ============================================================
@@ -2091,7 +2112,7 @@ function handleLISFile(file) {
         const snapWasArchived = snapH && (snapH.tabs || []).includes('archived');
         const nowInStock = (existing.tabs || []).includes('in_stock');
         if (snapWasArchived && nowInStock && !existing.tabs.includes('archived')) {
-          flagged.push(`⟳ c.${existing.copy_num} — archived item returned to library!`);
+          flagged.push('c.' + existing.copy_num + ' — archived item returned to library');
           existing.in_archive = false; // clear so it won't re-fire next upload
         }
       } else {
@@ -2116,31 +2137,6 @@ function handleLISFile(file) {
     state.changeLog = [...flagged, ...changes];
     state.lastUpdated = new Date().toLocaleDateString();
     document.getElementById('footer-date').textContent = state.lastUpdated;
-    // Verify last Alma report: re-flag any device whose update didn't make it into Alma
-    // (detected if Alma's description still has the OLD expiration date)
-    if (state.lastAlmaReport && state.lastAlmaReport.devices) {
-      let requeued = 0;
-      state.lastAlmaReport.devices.forEach(reported => {
-        const h = barcodeMap[reported.barcode];
-        if (!h) return;
-        // If the device still has last_mb_updated=false and exp_date matches what we reported,
-        // it's fine. But if Alma's description still shows the old exp, re-queue it.
-        // Simple heuristic: if the device has exp_date set and last_mb_updated is false,
-        // check whether description in the new LIS file still shows outdated exp info.
-        // Re-flag if not already flagged and the device is still in our report list.
-        if (!h.last_mb_updated) {
-          // Re-queue to ensure it makes it into next report
-          h.last_mb_updated = true;
-          requeued++;
-        }
-      });
-      if (requeued > 0) {
-        flagged.push('ℹ️ ' + requeued + ' device(s) from the last Alma report were re-queued for the next report (verification check).');
-      }
-      // Clear last report after verification so we don't re-queue on every upload
-      state.lastAlmaReport = null;
-    }
-
     recordUpload('LIS Inventory Report', buildLISChangeEvents(state.hotspots, barcodeMap, flagged, changes, updated, added));
     updateBadges();
 
@@ -2674,8 +2670,10 @@ function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated
     const fh = cn ? state.hotspots.find(x => x.copy_num === cn) : null;
     events.push({ type: 'returned',
       copy_num: cn, barcode: fh ? (fh.barcode || '') : '',
-      device_type: fh ? fh.device_type : '', library: fh ? fh.library : '',
-      desc: f.replace(/<[^>]+>/g, ''), detail: 'Previously archived' });
+      device_type: fh ? (fh.device_type || '') : '',
+      library: fh ? (fh.library || '') : '',
+      desc: 'Returned to library',
+      detail: 'Was previously archived' });
   });
 
   return events;
