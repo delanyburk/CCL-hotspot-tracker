@@ -1500,10 +1500,10 @@ function renderUpload() {
         ondragover="event.preventDefault();this.classList.add('dragover')"
         ondragleave="this.classList.remove('dragover')"
         ondrop="event.preventDefault();this.classList.remove('dragover');handleMBCombined(event.dataTransfer.files[0])">
-        <input type="file" id="file-mb-combined" accept=".xlsx,.xls,.csv" onchange="handleMBCombined(this.files[0])">
+        <input type="file" id="file-mb-combined" accept=".xlsx,.xls,.csv,.pdf" onchange="handleMBCombined(this.files[0])">
         <div class="upload-icon">📡</div>
         <div class="upload-title">Drop Mobile Beacon file here or click to browse</div>
-        <div class="upload-hint">Accepts .xlsx or .csv · Select report type above before uploading</div>
+        <div class="upload-hint">Accepts .xlsx, .csv, or .pdf invoice · Select report type above before uploading</div>
       </div>
       <div class="upload-result" id="result-mb-combined"></div>
     </div>
@@ -1589,15 +1589,133 @@ function updateMBTypeDesc() {
 function handleMBCombined(file) {
   if (!file) return;
   if (!confirm('⚠️ Important Reminder\n\nPlease make sure you have removed any EOPS/CaFE Hotspots from this file before uploading.\n\nContinue with upload?')) return;
+
+  // PDF invoices are always treated as renewal reports — route directly
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    handleMBInvoicePDF(file);
+    return;
+  }
+
   const sel = document.getElementById('mb-type-select');
   const type = sel ? sel.value : '';
   if (!type) {
     showResult('result-mb-combined', '❌ Please select a report type from the dropdown before uploading.', 'error');
     return;
   }
-  if (type === 'renewal')     handleMBFile(file, 'combined');
+  if (type === 'renewal')      handleMBFile(file, 'combined');
   if (type === 'deactivation') handleMBDeactivationFile(file);
-  if (type === 'active')      handleMBActiveFile(file, 'combined');
+  if (type === 'active')       handleMBActiveFile(file, 'combined');
+}
+
+// ============================================================
+// MB INVOICE PDF HANDLER
+// Parses Mobile Beacon renewal invoice PDFs.
+// Extracts IMEI + new expiration date from the invoice table,
+// then updates matching hotspots exactly like a renewal report.
+// ============================================================
+function handleMBInvoicePDF(file) {
+  showResult('result-mb-combined', '⟳ Reading PDF invoice…', 'info');
+  takeSnapshot();
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      // Load pdf.js from CDN
+      if (!window.pdfjsLib) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+
+      const typedArray = new Uint8Array(e.target.result);
+      const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
+
+      // Extract all text from all pages
+      let fullText = '';
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        fullText += content.items.map(i => i.str).join(' ') + '\n';
+      }
+
+      // Parse IMEI + expiration date pairs from the invoice table.
+      // Invoice rows look like: "Franklin T10 / 351094080229410   04/10/2027   $120.00"
+      // We extract any 14-16 digit number (IMEI) and the date following it.
+      const renewals = [];
+      // Match: product / IMEI ... date (MM/DD/YYYY)
+      const rowPattern = /Franklin\s+T\d+\s*\/\s*(\d{14,16})[\s\S]*?(\d{1,2}\/\d{1,2}\/\d{4})/g;
+      let match;
+      while ((match = rowPattern.exec(fullText)) !== null) {
+        const imei = match[1].trim();
+        const dateStr = match[2].trim();
+        // Convert MM/DD/YYYY → YYYY-MM-DD
+        const [mo, da, yr] = dateStr.split('/');
+        const isoDate = yr + '-' + mo.padStart(2, '0') + '-' + da.padStart(2, '0');
+        renewals.push({ imei, exp_date: isoDate });
+      }
+
+      if (renewals.length === 0) {
+        showResult('result-mb-combined', '❌ Could not find any device/date pairs in this PDF. Make sure it is a Mobile Beacon invoice.', 'error');
+        return;
+      }
+
+      // Build IMEI → hotspot map
+      const imeiMap = {};
+      state.hotspots.forEach(h => { if (h.imei) imeiMap[h.imei] = h; });
+
+      const changes = [];
+      let updated = 0, unmatched = 0;
+
+      renewals.forEach(({ imei, exp_date }) => {
+        const h = imeiMap[imei];
+        if (!h) {
+          unmatched++;
+          changes.push('IMEI ' + imei + ' — <span class="ch-old">not found in inventory</span>');
+          return;
+        }
+        const oldExp = h.exp_date || 'none';
+        if (exp_date !== oldExp) {
+          changes.push('c.' + h.copy_num + ' (IMEI ' + imei + ') exp <span class="ch-old">' +
+            (oldExp || 'none') + '</span> → <span class="ch-new">' + exp_date + '</span>');
+          h.exp_date = exp_date;
+          h.sub_status = new Date(exp_date) > TODAY ? 'Active' : 'Expired';
+          h.last_mb_updated = true;
+          h.on_mb_active = true;
+          // Clear sent_for_renewal if this renewal confirms the new date
+          if (h.sent_for_renewal) {
+            h.sent_for_renewal = false;
+            h.renewal_sent_date = null;
+          }
+          recalcTabs(h);
+          updated++;
+        }
+      });
+
+      state.changeLog = changes;
+      state.lastUpdated = new Date().toLocaleDateString();
+      document.getElementById('footer-date').textContent = state.lastUpdated;
+      recordUpload('MB Invoice PDF (Renewal)', buildMBChangeEvents(changes));
+      updateBadges();
+      saveState();
+
+      const summary = '✅ PDF invoice processed — ' + renewals.length + ' devices found.<br>' +
+        '<strong>' + updated + '</strong> expiration dates updated' +
+        (unmatched > 0 ? ' &nbsp;·&nbsp; <strong>' + unmatched + '</strong> IMEIs not found in inventory' : '');
+      showResult('result-mb-combined', summary, updated > 0 ? 'success' : 'info');
+      notify('PDF invoice processed: ' + updated + ' dates updated', updated > 0 ? 'success' : 'info');
+
+    } catch(err) {
+      console.error('PDF parse error:', err);
+      showResult('result-mb-combined', '❌ Could not read PDF: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 // ============================================================
