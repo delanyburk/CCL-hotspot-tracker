@@ -2555,6 +2555,12 @@ function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated
   const events = [];
 
   if (!_preUploadSnapshot || !Array.isArray(_preUploadSnapshot) || _preUploadSnapshot.length === 0) {
+    // No snapshot available — can't diff, but still record that the upload happened
+    if (updated > 0 || added > 0) {
+      events.push({ type: 'status_change', copy_num: null, barcode: '', device_type: '', library: '',
+        desc: 'LIS inventory processed',
+        detail: updated + ' updated, ' + added + ' new devices' });
+    }
     return events;
   }
 
@@ -2676,6 +2682,14 @@ function buildLISChangeEvents(hotspots, barcodeMap, flagged, rawChanges, updated
       detail: 'Was previously archived' });
   });
 
+  // Always include at least one event so the upload appears in history.
+  // If nothing changed at the tab level, record a neutral summary.
+  if (events.length === 0) {
+    events.push({ type: 'status_change', copy_num: null, barcode: '', device_type: '', library: '',
+      desc: 'LIS inventory processed — no status changes detected',
+      detail: updated + ' rows checked' + (added > 0 ? ', ' + added + ' new devices' : '') });
+  }
+
   return events;
 }
 
@@ -2727,7 +2741,9 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
 
 // Record a completed upload into history
 function recordUpload(source, events) {
-  if (!events || !events.length) return;
+  // Always record the upload even if no specific change events were detected.
+  // An empty events array means no diffable changes, but the upload still happened.
+  if (!events) events = [];
   const prof = state.profiles.find(p => p.id === state.activeProfileId);
   const record = {
     id: Date.now(),
@@ -3906,15 +3922,16 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   // are always current, not frozen at the time of the last file upload.
   state.hotspots.forEach(h => recalcTabs(h));
 
-  // Clean up any bad upload records where ALL events are false new_device floods
+  // Clean up mass-flood false positives only (50+ new_device events = bad import)
+  // Do NOT remove records with 0 events — those are legitimate uploads with no detected diffs
   state.changeHistory = state.changeHistory.filter(r => {
-    if (!r.events || !r.events.length) return false;
-    const allNew = r.events.every(e => e.type === 'new_device');
-    const isMassFlood = allNew && r.events.length > 50; // more than 50 "new devices" = false positive
+    if (!r.events) return false; // malformed record
+    const allNew = r.events.length > 0 && r.events.every(e => e.type === 'new_device');
+    const isMassFlood = allNew && r.events.length > 50;
     return !isMassFlood;
   });
   state.uploadHistory = state.uploadHistory.filter(h =>
-    state.changeHistory.some(r => r.id === h.id) || h.totalEvents <= 50
+    state.changeHistory.some(r => r.id === h.id)
   );
   // Remove loading indicator
   const el = document.getElementById('db-loading');
