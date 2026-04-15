@@ -1928,9 +1928,15 @@ function handleLISFile(file) {
           updated++;
         }
 
-        // Check for miraculously returned archived items
-        if (existing.in_archive && (proc === '' || stat === 'Item in place') && !['loan','missing','lost','lost and paid'].includes(proc.toLowerCase())) {
+        // Check for archived items returned to library.
+        // Only flag if the snapshot ALSO had them archived (wasArchived in snapshot tabs)
+        // AND they are now on in_stock — this prevents re-firing on every upload.
+        const snapH = _preUploadSnapshot ? _preUploadSnapshot.find(s => s.barcode === existing.barcode) : null;
+        const snapWasArchived = snapH && (snapH.tabs || []).includes('archived');
+        const nowInStock = (existing.tabs || []).includes('in_stock');
+        if (snapWasArchived && nowInStock && !existing.tabs.includes('archived')) {
           flagged.push(`⟳ c.${existing.copy_num} — archived item returned to library!`);
+          existing.in_archive = false; // clear so it won't re-fire next upload
         }
       } else {
         // New device not in our system
