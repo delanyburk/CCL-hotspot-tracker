@@ -3819,26 +3819,28 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
     state.hotspots.forEach(h => { if (h.copy_num != null) byCopyNum[h.copy_num] = h; });
     state.changeHistory.forEach(record => {
       (record.events || []).forEach(ev => {
-        // Normalize old desc formats first so copy_num extraction works below
-        if (ev.desc) {
-          if (ev.desc.startsWith('⟳ ')) ev.desc = ev.desc.slice(2);
-          if (ev.desc.includes('archived item returned to library')) {
-            ev.desc   = 'Returned to library';
-            if (!ev.detail) ev.detail = 'Was previously archived';
-          }
-        }
-
-        // If copy_num is missing, try to extract it from desc (e.g. "c.260 — ...")
+        // STEP 1: extract copy_num from raw desc BEFORE any normalization wipes it.
+        // Old flagged events stored desc like "⟳ c.260 — archived item returned to library!"
+        // We must grab the number before cleaning the string.
         if (ev.copy_num == null && ev.desc) {
           const m = ev.desc.match(/c\.?(\d+)/);
           if (m) ev.copy_num = parseInt(m[1]);
         }
 
-        // Now fill in missing barcode/device_type/library using copy_num
+        // STEP 2: normalize old desc formats
+        if (ev.desc) {
+          if (ev.desc.startsWith('⟳ ')) ev.desc = ev.desc.slice(2);
+          if (ev.desc.includes('archived item returned to library')) {
+            ev.desc = 'Returned to library';
+            if (!ev.detail) ev.detail = 'Was previously archived';
+          }
+        }
+
+        // STEP 3: fill in missing barcode/device_type/library using copy_num
         if (!ev.barcode && ev.copy_num != null) {
           const h = byCopyNum[ev.copy_num];
           if (h) {
-            ev.barcode     = h.barcode              || '';
+            ev.barcode     = h.barcode                      || '';
             ev.device_type = ev.device_type || h.device_type || '';
             ev.library     = ev.library     || h.library     || '';
           }
