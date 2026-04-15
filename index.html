@@ -2739,6 +2739,101 @@ function buildMBAChangeEvents(rawChanges, deactivated, updated) {
   return events;
 }
 
+// ============================================================
+// AUTOMATIC DAILY CHECK
+// Runs on every page load. Detects hotspots that crossed the
+// 90-day overdue threshold or whose subscription just expired.
+// Records a "Automatic Daily Check" entry — but only if changes
+// are found AND only once per calendar day.
+// ============================================================
+function checkAutomaticChanges() {
+  const autoEvents = [];
+
+  state.hotspots.forEach(h => {
+    const prevProcessType = h.process_type;
+    const prevSubStatus   = h.sub_status;
+
+    // Run recalcTabs — this may auto-set process_type='Lost' for 90+ day overdue
+    recalcTabs(h);
+
+    const newProcessType = h.process_type;
+    const newSubStatus   = h.sub_status;
+
+    // Detect auto-lost (90+ days overdue → process type changed to Lost)
+    if (prevProcessType !== 'Lost' &&
+        newProcessType === 'Lost' &&
+        !['lost','missing','lost and paid','claimed returned'].includes((prevProcessType||'').toLowerCase())) {
+      autoEvents.push({
+        type: 'auto_lost',
+        copy_num: h.copy_num,
+        barcode: h.barcode || '',
+        device_type: h.device_type,
+        library: h.library,
+        desc: 'Automatically moved to Lost/Missing',
+        detail: 'Was overdue ' + (h.days_overdue || '90+') + ' days — process type set to Lost',
+      });
+    }
+
+    // Detect newly expired subscription
+    if (prevSubStatus !== 'Expired' &&
+        newSubStatus === 'Expired' &&
+        !['Deactivated','Blocked'].includes(prevSubStatus)) {
+      autoEvents.push({
+        type: 'auto_expired',
+        copy_num: h.copy_num,
+        barcode: h.barcode || '',
+        device_type: h.device_type,
+        library: h.library,
+        desc: 'Subscription automatically marked Expired',
+        detail: 'Exp date ' + h.exp_date + ' has passed',
+      });
+    }
+  });
+
+  if (autoEvents.length === 0) return; // nothing changed — no entry needed
+
+  // Only record once per calendar day — skip if already logged today
+  const todayStr = new Date().toLocaleDateString();
+  const alreadyLoggedBarcodes = new Set(
+    state.changeHistory
+      .filter(r => r.source === 'Automatic Daily Check' && r.date && r.date.startsWith(todayStr))
+      .flatMap(r => (r.events || []).map(e => e.barcode))
+  );
+  const newEvents = autoEvents.filter(e => !alreadyLoggedBarcodes.has(e.barcode));
+  if (newEvents.length === 0) return;
+
+  const record = {
+    id: Date.now(),
+    source: 'Automatic Daily Check',
+    date: new Date().toLocaleString(),
+    events: newEvents,
+    profileId: null,
+    profileName: 'System',
+    profileColor: '#555d7a',
+    collapsed: false,
+    sectionState: {},
+    snapshot: null, // automatic checks are not undoable
+  };
+  state.changeHistory.unshift(record);
+  if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
+
+  const typeCounts = {};
+  newEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0)+1; });
+  state.uploadHistory.unshift({
+    id: record.id,
+    date: record.date,
+    source: 'Automatic Daily Check',
+    profileId: null,
+    profileName: 'System',
+    profileColor: '#555d7a',
+    typeCounts,
+    totalEvents: newEvents.length,
+  });
+  if (state.uploadHistory.length > 50) state.uploadHistory = state.uploadHistory.slice(0, 50);
+
+  saveState();
+}
+
 // Record a completed upload into history
 function recordUpload(source, events) {
   // Always record the upload even if no specific change events were detected.
@@ -3916,6 +4011,9 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   })();
   // If any events were patched, save immediately so Supabase has the fixed version
   if (_patchMadeChanges) saveState();
+
+  // Run automatic daily check (90d overdue → Lost, expired subs)
+  checkAutomaticChanges();
 
   // Recalculate tabs, overdue counts, and expiry status for every hotspot
   // using today's real date. This ensures days-overdue and expired flags
