@@ -3207,65 +3207,130 @@ function renderChanges() {
   }
 
   const SECTIONS = [
-    { key: 'checked_out',    label: 'Checked Out',                     cls: 'rcs-checked-out' },
-    { key: 'returned',       label: 'Returned to Library',             cls: 'rcs-returned' },
-    { key: 'renewed',        label: 'Renewed / Exp Updated',           cls: 'rcs-renewed' },
-    { key: 'archived',       label: 'Moved to Archive',                cls: 'rcs-archived' },
-    { key: 'deactivated_mb', label: 'Deactivated by MB Recon',         cls: 'rcs-deactivated' },
-    { key: 'restored',       label: 'Restored (MB Recon)',             cls: 'rcs-restored' },
-    { key: 'auto_lost',      label: 'Auto-Marked Lost (90+ Days OD)',  cls: 'rcs-auto-lost' },
-    { key: 'auto_expired',   label: 'Subscriptions Expired',           cls: 'rcs-auto-expired' },
-    { key: 'status_change',  label: 'Status Changes',                  cls: 'rcs-status' },
-    { key: 'sent_for_renewal', label: 'Sent for Renewal',              cls: 'rcs-teal' },
-    { key: 'new_device',     label: 'New Devices Added',               cls: 'rcs-new' },
+    { key: 'checked_out',      label: 'Checked Out',                    cls: 'rcs-checked-out' },
+    { key: 'returned',         label: 'Returned to Library',            cls: 'rcs-returned' },
+    { key: 'renewed',          label: 'Renewed / Exp Updated',          cls: 'rcs-renewed' },
+    { key: 'archived',         label: 'Moved to Archive',               cls: 'rcs-archived' },
+    { key: 'deactivated_mb',   label: 'Deactivated by MB Recon',        cls: 'rcs-deactivated' },
+    { key: 'restored',         label: 'Restored (MB Recon)',            cls: 'rcs-restored' },
+    { key: 'auto_lost',        label: 'Auto-Marked Lost (90+ Days OD)', cls: 'rcs-auto-lost' },
+    { key: 'auto_expired',     label: 'Subscriptions Expired',          cls: 'rcs-auto-expired' },
+    { key: 'status_change',    label: 'Status Changes',                 cls: 'rcs-status' },
+    { key: 'sent_for_renewal', label: 'Sent for Renewal',               cls: 'rcs-teal' },
+    { key: 'new_device',       label: 'New Devices Added',              cls: 'rcs-new' },
   ];
+
+  // Unique upload sources for the source filter dropdown
+  const allSources = [...new Set(state.changeHistory.map(r => r.source))].sort();
+
+  // Read persisted filter state
+  const rcSearch    = (state._rcSearch    || '').toLowerCase().trim();
+  const rcSource    = state._rcSource    || '';
+  const rcType      = state._rcType      || '';
+
+  // Count total visible events for the summary line
+  let totalVisible = 0;
+  let blocksVisible = 0;
 
   let html = `<div class="rc-header">
     <h2>Recent Changes</h2>
-    <span class="rc-meta">${state.changeHistory.length} upload${state.changeHistory.length!==1?'s':''} recorded</span>
+    <span class="rc-meta" id="rc-visible-count">${state.changeHistory.length} upload${state.changeHistory.length!==1?'s':''} recorded</span>
     <button class="export-btn" style="margin-left:auto" onclick="exportAllChanges()">⬇ Export All</button>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;padding:10px 14px;
+    background:var(--card);border:1px solid var(--border);border-radius:10px">
+
+    <input id="rc-search" type="text" placeholder="Search copy #, barcode, description…"
+      value="${(state._rcSearch||'').replace(/"/g,'&quot;')}"
+      oninput="state._rcSearch=this.value;renderChanges()"
+      style="flex:1;min-width:180px;font-family:'DM Mono',monospace;font-size:11px;padding:5px 9px;
+        background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px">
+
+    <select id="rc-filter-source" onchange="state._rcSource=this.value;renderChanges()"
+      style="font-family:'DM Mono',monospace;font-size:11px;padding:5px 8px;
+        background:var(--bg);color:var(--text2);border:1px solid var(--border);border-radius:6px">
+      <option value="">All upload types</option>
+      ${allSources.map(s => `<option value="${s}" ${s===rcSource?'selected':''}>${s}</option>`).join('')}
+    </select>
+
+    <select id="rc-filter-type" onchange="state._rcType=this.value;renderChanges()"
+      style="font-family:'DM Mono',monospace;font-size:11px;padding:5px 8px;
+        background:var(--bg);color:var(--text2);border:1px solid var(--border);border-radius:6px">
+      <option value="">All change types</option>
+      ${SECTIONS.map(s => `<option value="${s.key}" ${s.key===rcType?'selected':''}>${s.label}</option>`).join('')}
+    </select>
+
+    ${(rcSearch||rcSource||rcType) ? `<button class="export-btn" onclick="state._rcSearch='';state._rcSource='';state._rcType='';renderChanges()"
+      style="color:var(--red);border-color:var(--red);white-space:nowrap">✕ Clear</button>` : ''}
   </div>`;
 
   state.changeHistory.forEach((record, ri) => {
-    const hdrClass = record.collapsed ? 'collapsed' : '';
-    const bodyClass = record.collapsed ? 'hidden' : '';
-    const totalEvents = record.events.length;
+    // ── Source filter ──────────────────────────────────────────
+    if (rcSource && record.source !== rcSource) return;
 
-    // Count by type for the header badges
-    const typeCounts = {};
-    record.events.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0)+1; });
+    // ── Per-event filtering ────────────────────────────────────
+    // For each section, filter events by type AND search term
+    const filteredSections = SECTIONS.map(sec => {
+      let items = record.events.filter(e => e.type === sec.key);
 
+      // Type filter: if a specific type is selected, skip other sections entirely
+      if (rcType && sec.key !== rcType) return { ...sec, items: [] };
 
+      // Search filter: match copy_num, barcode, desc, detail
+      if (rcSearch) {
+        items = items.filter(e => {
+          const haystack = [
+            e.copy_num != null ? 'c.' + e.copy_num : '',
+            e.barcode || '',
+            e.desc    || '',
+            e.detail  || '',
+            e.library || '',
+            e.device_type || '',
+          ].join(' ').toLowerCase();
+          return haystack.includes(rcSearch);
+        });
+      }
+
+      return { ...sec, items };
+    });
+
+    // Skip entire upload block if no events survive filtering
+    const blockTotal = filteredSections.reduce((n, s) => n + s.items.length, 0);
+    if (blockTotal === 0) return;
+
+    blocksVisible++;
+    totalVisible += blockTotal;
+
+    const hdrClass  = record.collapsed ? 'collapsed' : '';
+    const bodyClass = record.collapsed ? 'hidden'    : '';
     const hasSnapshot = !!record.snapshot;
+
     html += `<div class="rc-upload-block">
       <div class="rc-upload-header ${hdrClass}" onclick="toggleRCBlock(${ri})">
         <span class="rc-upload-title">Upload #${state.changeHistory.length - ri} &nbsp;·&nbsp; ${record.source}</span>
         <span class="rc-upload-date">${record.date}</span>
-        <span class="rc-upload-source">${totalEvents} change${totalEvents!==1?'s':''}</span>
+        <span class="rc-upload-source">${blockTotal} change${blockTotal!==1?'s':''}</span>
         ${hasSnapshot ? `<button class="export-btn" style="font-size:10px;padding:3px 9px;color:var(--yellow);border-color:var(--yellow);flex-shrink:0" onclick="event.stopPropagation();undoUpload(${record.id})">↩ Undo</button>` : ''}
         <span class="rc-upload-chevron">▼</span>
       </div>
       <div class="rc-upload-body ${bodyClass}">`;
 
-    SECTIONS.forEach(sec => {
-      const items = record.events.filter(e => e.type === sec.key);
-      if (!items.length) return;
-      const secKey = `${ri}_${sec.key}`;
+    filteredSections.forEach(sec => {
+      if (!sec.items.length) return;
       const secCollapsed = record.sectionState[sec.key] === false;
-      const secHdr = secCollapsed ? 'collapsed' : '';
-      const secBody = secCollapsed ? 'hidden' : '';
+      const secHdr  = secCollapsed ? 'collapsed' : '';
+      const secBody = secCollapsed ? 'hidden'    : '';
 
       html += `<div class="rc-section ${sec.cls}">
         <div class="rc-section-header ${secHdr}" onclick="toggleRCSection(${ri},'${sec.key}')">
           ${sec.label}
-          <span class="rc-section-count">${items.length}</span>
+          <span class="rc-section-count">${sec.items.length}</span>
           <span class="rc-section-chevron">▼</span>
         </div>
         <div class="rc-section-items ${secBody}">`;
 
-      items.forEach(ev => {
-        // Resolve missing fields at render time — fixes old stored events regardless of what's in DB
-        // Step 1: extract copy_num from desc if missing (old flagged events: "⟳ c.260 — ...")
+      sec.items.forEach(ev => {
         let evCopyNum = ev.copy_num;
         let evBarcode = ev.barcode || '';
         let evDevType = ev.device_type || '';
@@ -3273,20 +3338,15 @@ function renderChanges() {
         let evDesc    = ev.desc || '';
         let evDetail  = ev.detail || '';
 
-        // Step 1: clean up old desc formats
         if (evDesc.startsWith('⟳ ')) evDesc = evDesc.slice(2);
         if (evDesc.includes('archived item returned to library')) {
           evDesc = 'Returned to library';
           if (!evDetail) evDetail = 'Was previously archived';
         }
-        // Step 2: extract copy_num from desc if still missing
-        // Must happen AFTER desc cleanup — old desc had "⟳ c.260 — archived..."
-        // but if a previous save already wiped it to "Returned to library", this won't help
         if (evCopyNum == null && evDesc) {
           const m = evDesc.match(/c\.?(\d+)/);
           if (m) evCopyNum = parseInt(m[1]);
         }
-        // Step 3: fill in barcode/device_type/library from live hotspot data
         if (evCopyNum != null && (!evBarcode || !evDevType || !evLibrary)) {
           const liveH = state.hotspots.find(x => x.copy_num === evCopyNum);
           if (liveH) {
@@ -3296,10 +3356,7 @@ function renderChanges() {
           }
         }
 
-        // Skip permanently broken events (copy_num and barcode both unrecoverable)
         if (!evCopyNum && !evBarcode && evDesc === 'Returned to library') {
-          // These are old events whose copy number was lost in a previous save.
-          // Show them with a note rather than broken dashes.
           html += `<div class="rc-item" style="opacity:0.5;font-style:italic">
             <span class="rc-item-copy">—</span>
             <span class="rc-item-type"></span>
@@ -3309,12 +3366,21 @@ function renderChanges() {
           </div>`;
           return;
         }
+
+        // Highlight search term in desc if searching
+        let highlightedDesc = evDesc + (evDetail ? ' <span class="reason">— ' + evDetail + '</span>' : '');
+        if (rcSearch && evDesc.toLowerCase().includes(rcSearch)) {
+          const re = new RegExp('(' + rcSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+          highlightedDesc = evDesc.replace(re, '<mark style="background:var(--yellow);color:#000;border-radius:2px">$1</mark>') +
+            (evDetail ? ' <span class="reason">— ' + evDetail + '</span>' : '');
+        }
+
         const typeClass = evDevType === 'T10' ? 'badge-blue' : evDevType === 'T9' ? 'badge-purple' : 'badge-gray';
         html += `<div class="rc-item clickable" ${evBarcode ? `onclick="showDetail('${evBarcode}')"` : ''} style="${evBarcode ? 'cursor:pointer' : ''}">
           <span class="rc-item-copy">${evCopyNum ? 'c. ' + evCopyNum : '—'}</span>
           <span class="rc-item-type">${evDevType ? '<span class="badge ' + typeClass + '">' + evDevType + '</span>' : ''}</span>
           <span class="rc-item-barcode" title="${evBarcode}">${evBarcode ? evBarcode.slice(-8) : '—'}</span>
-          <span class="rc-item-desc">${evDesc}${evDetail ? ' <span class="reason">— ' + evDetail + '</span>' : ''}</span>
+          <span class="rc-item-desc">${highlightedDesc}</span>
           <span class="rc-item-lib">${evLibrary ? libBadge(evLibrary) : ''}</span>
         </div>`;
       });
@@ -3325,8 +3391,27 @@ function renderChanges() {
     html += `</div></div>`;
   });
 
+  // No results message
+  if (blocksVisible === 0) {
+    html += `<div class="rc-empty" style="margin-top:24px">
+      <div class="rc-empty-icon">⌕</div>
+      <p>No changes match your filters.<br>
+      <button class="export-btn" style="margin-top:8px" onclick="state._rcSearch='';state._rcSource='';state._rcType='';renderChanges()">Clear filters</button></p>
+    </div>`;
+  }
+
   el.innerHTML = html;
+
+  // Update visible count after render
+  const countEl = document.getElementById('rc-visible-count');
+  if (countEl) {
+    const isFiltered = rcSearch || rcSource || rcType;
+    countEl.textContent = isFiltered
+      ? blocksVisible + ' of ' + state.changeHistory.length + ' uploads · ' + totalVisible + ' events'
+      : state.changeHistory.length + ' upload' + (state.changeHistory.length!==1?'s':'') + ' recorded';
+  }
 }
+
 
 function toggleRCBlock(idx) {
   state.changeHistory[idx].collapsed = !state.changeHistory[idx].collapsed;
