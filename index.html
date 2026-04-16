@@ -824,6 +824,7 @@ let state = {
   overrideRules: [],   // manual override history with AI analysis
   lastAlmaReport: null,   // { date, devices: [{barcode, exp_date, sub_status, copy_num}] }
   almaReportHistory: [],  // last 5 generated reports for regeneration
+  lastLISStatuses: {},    // barcode → {lis_status, process_type} from most recent LIS upload — for Alma mismatch detection
   attentionExpanded: true,
   attnTier_critical: true,
   attnTier_warning: true,
@@ -854,6 +855,28 @@ function formatDate(dateStr) {
   }
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function showSaveBanner(msg) {
+  let banner = document.getElementById('save-fail-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'save-fail-banner';
+    banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#3a1a1a;' +
+      'color:#ff6b6b;font-family:DM Mono,monospace;font-size:11px;padding:8px 16px;' +
+      'z-index:9999;display:flex;align-items:center;gap:12px;border-top:1px solid #ff6b6b';
+    document.body.appendChild(banner);
+  }
+  banner.innerHTML = '⚠ ' + msg +
+    ' <button onclick="clearSaveBanner()" style="margin-left:auto;background:none;' +
+    'border:1px solid currentColor;color:inherit;border-radius:4px;padding:2px 8px;' +
+    'cursor:pointer;font-size:10px">Dismiss</button>';
+  banner.style.display = 'flex';
+}
+
+function clearSaveBanner() {
+  const el = document.getElementById('save-fail-banner');
+  if (el) el.style.display = 'none';
 }
 
 function notify(msg, type = 'info') {
@@ -1224,6 +1247,13 @@ function buildAttentionItems() {
       triggers.push({ tier: 'warning', tag: 'RETURNED — REACTIVATE', tagClass: 'atag-yellow', detail: reason });
     }
 
+    // CRITICAL: Overdue 60–89 days — approaching auto-Lost conversion
+    if (tabs.includes('overdue') && daysOD >= 60 && daysOD < 90 && !tabs.includes('lost_missing')) {
+      const daysLeft = 90 - daysOD;
+      triggers.push({ tier: 'critical', tag: 'AUTO-LOST IN ' + daysLeft + 'D', tagClass: 'atag-red',
+        detail: daysOD + 'd overdue — will auto-convert to Lost at 90d' });
+    }
+
     // WARNING: Overdue 30–59 days
     if (tabs.includes('overdue') && daysOD >= 30 && daysOD < 60) {
       triggers.push({ tier: 'warning', tag: 'OVERDUE 30+ DAYS', tagClass: 'atag-orange', detail: daysOD + 'd past due' });
@@ -1244,6 +1274,25 @@ function buildAttentionItems() {
       const label = proc === 'missing' ? 'MISSING' : proc === 'lost and paid' ? 'LOST & PAID' : 'MARKED LOST';
       if (sub !== 'Active') { // already caught by critical above if Active
         triggers.push({ tier: 'warning', tag: label, tagClass: 'atag-orange', detail: 'Not yet deactivated' });
+      }
+    }
+
+    // CRITICAL: Alma status mismatch — app says Lost/Missing but Alma says Loan
+    // Only shown after a LIS upload has been processed (lastLISStatuses populated)
+    if (Object.keys(state.lastLISStatuses).length > 0 && h.barcode && state.lastLISStatuses[h.barcode]) {
+      const almaStatus = state.lastLISStatuses[h.barcode];
+      const almaProc = (almaStatus.process_type || '').toLowerCase().trim();
+      const isLostInApp = tabs.includes('lost_missing');
+      const almaThinksloan = almaProc === 'loan';
+      if (isLostInApp && almaThinksloan) {
+        triggers.push({ tier: 'critical', tag: 'ALMA MISMATCH', tagClass: 'atag-red',
+          detail: 'App: Lost/Missing — Alma: still Loan' });
+      }
+      // Warning: To Be Reactivated but Alma doesn't show it as returned yet
+      const almaLisStatus = (almaStatus.lis_status || '').toLowerCase();
+      if (tabs.includes('to_be_reactivated') && !almaLisStatus.includes('in place')) {
+        triggers.push({ tier: 'warning', tag: 'CONFIRM IN ALMA', tagClass: 'atag-orange',
+          detail: 'Returned to library — update Alma status' });
       }
     }
 
@@ -1413,14 +1462,60 @@ function renderDashboard() {
   if (activeTab === 'upcoming_renewals') {
     const within30 = tabData.filter(h=>{ const d=daysUntil(h.exp_date); return d!==null&&d<=30; }).length;
     const within90 = tabData.filter(h=>{ const d=daysUntil(h.exp_date); return d!==null&&d>30&&d<=90; }).length;
-    html += `<div style="margin-bottom:12px;font-size:11px;font-family:'DM Mono',monospace;color:var(--text2)">
-      <span style="color:var(--red)">●</span> ${within30} expire within 30 days &nbsp;
-      <span style="color:var(--yellow)">●</span> ${within90} within 90 days
+    const alreadySent = tabData.filter(h=>h.sent_for_renewal).length;
+    const notYetSent  = tabData.length - alreadySent;
+    html += `<div style="margin-bottom:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--text2)">
+        <span style="color:var(--red)">●</span> ${within30} expire within 30 days &nbsp;
+        <span style="color:var(--yellow)">●</span> ${within90} within 90 days
+      </div>
+      ${notYetSent > 0 ? `<button class="export-btn" style="color:var(--teal);border-color:var(--teal)"
+        onclick="markAllUpcomingAsSent()">⟳ Mark all ${notYetSent} as Sent for Renewal</button>` : ''}
     </div>`;
   }
 
+  // Export current tab button
+  html += `<div style="text-align:right;margin-bottom:6px">
+    <button class="export-btn" onclick="exportCurrentTab('${activeTab}')">⬇ Export this list (CSV)</button>
+  </div>`;
   html += `<div id="live-table">`+buildTable(tabData, activeTab)+`</div>`;
   document.getElementById('content').innerHTML = html;
+}
+
+function exportCurrentTab(tabId) {
+  let data;
+  if (tabId === 'sent_for_renewal') {
+    data = state.hotspots.filter(h => h.sent_for_renewal);
+  } else {
+    data = state.hotspots.filter(h => h.tabs && h.tabs.includes(tabId));
+  }
+  if (!data.length) { notify('No devices in this tab to export', 'info'); return; }
+
+  const TAB_LABELS = {
+    in_stock:'In Stock', active_loans:'Active Loans', overdue:'Overdue',
+    lost_missing:'Lost-Missing', archived:'Archived', sent_for_renewal:'Sent for Renewal',
+    upcoming_renewals:'Upcoming Renewals', to_be_reactivated:'To Be Reactivated',
+    to_deactivate:'To Deactivate', mb_active_subs:'MB Active Subs',
+  };
+  const label = TAB_LABELS[tabId] || tabId;
+
+  const cols = ['copy_num','barcode','imei','device_type','program','library',
+                'lis_status','process_type','due_date','sub_status','exp_date',
+                'days_overdue','description'];
+  let csv = cols.join(',') + '\n';
+  data.sort((a,b) => (a.copy_num||0) - (b.copy_num||0)).forEach(h => {
+    csv += cols.map(c => {
+      const v = h[c] == null ? '' : String(h[c]);
+      return v.includes(',') || v.includes('"') ? '"' + v.replace(/"/g,'""') + '"' : v;
+    }).join(',') + '\n';
+  });
+
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  const today = new Date().toISOString().split('T')[0];
+  a.download = 'hotspots_' + label.replace(/[^a-z0-9]/gi,'_').toLowerCase() + '_' + today + '.csv';
+  a.click();
+  notify(data.length + ' devices exported as CSV', 'success');
 }
 
 // ============================================================
@@ -1562,9 +1657,21 @@ function renderUpload() {
       </div>
     </div>
 
+    <div class="report-card" id="alma-mismatch-card" style="margin-top:0">
+      <div class="report-card-body">
+        <div class="report-card-icon">⚠️</div>
+        <div class="report-card-info">
+          <div class="report-card-title">Alma Status Mismatches</div>
+          <div class="report-card-desc">Devices marked Lost/Missing or To Be Reactivated in this app where the last LIS upload shows a different status in Alma. Upload a new LIS report to confirm or clear these.</div>
+          <div class="report-card-count" id="alma-mismatch-count" onclick="showAlmaMismatches()" style="cursor:pointer;text-decoration:underline;color:var(--yellow)" title="Click to see mismatches">—</div>
+        </div>
+      </div>
+    </div>
+
 `;
   // Update the Alma report count after render
   // (alma-report-count now shows static link text set in HTML)
+  setTimeout(() => updateAlmaMismatchCount(), 0);
 }
 
 // ============================================================
@@ -1867,6 +1974,107 @@ function generateAlmaReport() {
   });
 }
 
+function updateAlmaMismatchCount() {
+  const el = document.getElementById('alma-mismatch-count');
+  if (!el) return;
+  if (!Object.keys(state.lastLISStatuses).length) {
+    el.textContent = 'Upload a LIS report to detect mismatches';
+    el.style.cursor = 'default';
+    el.style.textDecoration = 'none';
+    return;
+  }
+  const mismatches = getAlmaMismatches();
+  const total = mismatches.lostNotInAlma.length + mismatches.reactivateNotInAlma.length;
+  el.textContent = total > 0
+    ? total + ' mismatch' + (total !== 1 ? 'es' : '') + ' detected — click to review'
+    : '✓ No mismatches — Alma is in sync';
+  el.style.color = total > 0 ? 'var(--yellow)' : 'var(--green)';
+}
+
+function getAlmaMismatches() {
+  const lostNotInAlma = [];
+  const reactivateNotInAlma = [];
+  if (!Object.keys(state.lastLISStatuses).length) return { lostNotInAlma, reactivateNotInAlma };
+
+  state.hotspots.forEach(h => {
+    if (!h.barcode || !state.lastLISStatuses[h.barcode]) return;
+    const alma = state.lastLISStatuses[h.barcode];
+    const almaProc = (alma.process_type || '').toLowerCase().trim();
+    const almaLis  = (alma.lis_status  || '').toLowerCase().trim();
+
+    // Lost/Missing in app but Alma still says Loan
+    if (h.tabs && h.tabs.includes('lost_missing') && almaProc === 'loan') {
+      lostNotInAlma.push({ h, almaProc, almaLis });
+    }
+    // To Be Reactivated (returned to library) but Alma doesn't show "in place"
+    if (h.tabs && h.tabs.includes('to_be_reactivated') && !almaLis.includes('in place')) {
+      reactivateNotInAlma.push({ h, almaProc, almaLis });
+    }
+  });
+  return { lostNotInAlma, reactivateNotInAlma };
+}
+
+function showAlmaMismatches() {
+  const { lostNotInAlma, reactivateNotInAlma } = getAlmaMismatches();
+  if (!Object.keys(state.lastLISStatuses).length) {
+    notify('Upload a LIS Inventory Report first to enable mismatch detection', 'info');
+    return;
+  }
+
+  let html = '<div style="max-height:70vh;overflow-y:auto;padding:4px 0">';
+
+  if (lostNotInAlma.length) {
+    html += '<div style="font-size:12px;font-weight:700;color:var(--yellow);font-family:DM Mono,monospace;' +
+      'padding:8px 0 6px;border-bottom:2px solid var(--border);margin-bottom:8px">' +
+      '⚠ Lost/Missing in app — Alma still shows Loan (' + lostNotInAlma.length + ')</div>';
+    lostNotInAlma.forEach(({h, almaProc}) => {
+      const badge = h.device_type === 'T10' ? '<span class="badge badge-blue">T10</span>' :
+                    h.device_type === 'T9'  ? '<span class="badge badge-purple">T9</span>' : '';
+      html += '<div style="display:grid;grid-template-columns:56px 56px 1fr;gap:8px;align-items:center;' +
+        'padding:5px 0;border-bottom:1px solid var(--border);cursor:pointer;font-size:11px" ' +
+        'onclick="closeDetail();showDetail(" + h.barcode + ")">' +
+        '<span style="font-weight:700;font-family:Syne,sans-serif">c. ' + h.copy_num + '</span>' +
+        '<span>' + badge + '</span>' +
+        '<span style="font-family:DM Mono,monospace;color:var(--text2)">' +
+          (h.process_type || 'Lost') + ' — Alma: ' + almaProc + '</span>' +
+        '</div>';
+    });
+  }
+
+  if (reactivateNotInAlma.length) {
+    html += '<div style="font-size:12px;font-weight:700;color:var(--yellow);font-family:DM Mono,monospace;' +
+      'padding:12px 0 6px;border-bottom:2px solid var(--border);margin-bottom:8px">' +
+      '⟳ Returned to library — Alma status not yet updated (' + reactivateNotInAlma.length + ')</div>';
+    reactivateNotInAlma.forEach(({h, almaLis}) => {
+      const badge = h.device_type === 'T10' ? '<span class="badge badge-blue">T10</span>' :
+                    h.device_type === 'T9'  ? '<span class="badge badge-purple">T9</span>' : '';
+      html += '<div style="display:grid;grid-template-columns:56px 56px 1fr;gap:8px;align-items:center;' +
+        'padding:5px 0;border-bottom:1px solid var(--border);cursor:pointer;font-size:11px" ' +
+        'onclick="closeDetail();showDetail(" + h.barcode + ")">' +
+        '<span style="font-weight:700;font-family:Syne,sans-serif">c. ' + h.copy_num + '</span>' +
+        '<span>' + badge + '</span>' +
+        '<span style="font-family:DM Mono,monospace;color:var(--text2)">' +
+          'Alma LIS status: ' + (almaLis || 'unknown') + '</span>' +
+        '</div>';
+    });
+  }
+
+  if (!lostNotInAlma.length && !reactivateNotInAlma.length) {
+    html += '<div style="font-size:12px;color:var(--green);font-family:DM Mono,monospace;padding:16px 0">' +
+      '✓ All device statuses are in sync between the app and Alma.</div>';
+  }
+
+  html += '</div>';
+
+  document.getElementById('detail-modal-content').innerHTML =
+    '<div class="detail-modal-header">' +
+    '<div class="detail-modal-title">Alma Status Mismatches</div>' +
+    '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace">Based on last LIS upload</div>' +
+    '<button class="detail-close" onclick="closeDetail()">✕</button>' +
+    '</div>' + html;
+  document.getElementById('detail-overlay').classList.remove('hidden');
+}
+
 function showRecentAlmaUpdates() {
   // Show a modal with recent exp/status changes grouped by date (last 180 days)
   const cutoff = Date.now() - (180 * 24 * 60 * 60 * 1000);
@@ -2020,6 +2228,29 @@ function normDueDate(raw) {
   } catch { return ''; }
 }
 
+function previewLISChanges(rows, cols) {
+  // Quick pre-scan to count what will change — for confirmation dialog
+  const barcodeMap = {};
+  state.hotspots.forEach(h => { barcodeMap[h.barcode] = h; });
+  let willUpdate = 0, willAdd = 0;
+  const procChanges = [], statusChanges = [], dueChanges = [];
+  rows.forEach(row => {
+    const barcode = String(row[cols.barcode]||'').trim();
+    if (!barcode) return;
+    const proc = String(row[cols.proc]||'').trim();
+    const stat = String(row[cols.status]||'').trim();
+    const existing = barcodeMap[barcode];
+    if (existing) {
+      if (proc !== existing.process_type) procChanges.push('c.' + existing.copy_num);
+      if (stat !== existing.lis_status)   statusChanges.push('c.' + existing.copy_num);
+      if (proc !== existing.process_type || stat !== existing.lis_status) willUpdate++;
+    } else {
+      willAdd++;
+    }
+  });
+  return { willUpdate, willAdd, procChanges, statusChanges };
+}
+
 function handleLISFile(file) {
   if (!file) return;
   if (!confirm('⚠️ Important Reminder\n\nPlease make sure you have removed any EOPS/CaFE Hotspots from this file before uploading.\n\nContinue with upload?')) return;
@@ -2047,6 +2278,17 @@ function handleLISFile(file) {
     for (const [field, keys] of Object.entries(COL_MAP)) cols[field] = findCol(sample, keys);
 
     if (!cols.barcode) { showResult('result-lis', '❌ Could not find Barcode column. Check your file format.', 'error'); return; }
+
+    // Preview what will change before committing
+    const preview = previewLISChanges(rows, cols);
+    const previewMsg = '📋 LIS Upload Preview\n\n' +
+      rows.length + ' rows found in file\n' +
+      preview.willUpdate + ' existing device records will be updated\n' +
+      preview.willAdd    + ' new devices will be added\n\n' +
+      (preview.procChanges.length  ? '⚠️  Process type changes: ' + preview.procChanges.slice(0,5).join(', ') + (preview.procChanges.length > 5 ? ' +' + (preview.procChanges.length-5) + ' more' : '') + '\n' : '') +
+      (preview.statusChanges.length ? '⚠️  LIS status changes: ' + preview.statusChanges.slice(0,5).join(', ') + (preview.statusChanges.length > 5 ? ' +' + (preview.statusChanges.length-5) + ' more' : '') + '\n' : '') +
+      '\nProceed with upload?';
+    if (!confirm(previewMsg)) { showResult('result-lis', 'Upload cancelled.', 'info'); return; }
 
     const changes = [];
     const barcodeMap = {};
@@ -2137,6 +2379,17 @@ function handleLISFile(file) {
     state.changeLog = [...flagged, ...changes];
     state.lastUpdated = new Date().toLocaleDateString();
     document.getElementById('footer-date').textContent = state.lastUpdated;
+    // Save a snapshot of Alma's statuses for mismatch detection
+    state.lastLISStatuses = {};
+    rows.forEach(row => {
+      const barcode = String(row[cols.barcode]||'').trim();
+      if (!barcode) return;
+      state.lastLISStatuses[barcode] = {
+        lis_status: String(row[cols.status]||'').trim(),
+        process_type: String(row[cols.proc]||'').trim(),
+      };
+    });
+
     recordUpload('LIS Inventory Report', buildLISChangeEvents(state.hotspots, barcodeMap, flagged, changes, updated, added));
     updateBadges();
 
@@ -2154,7 +2407,6 @@ function handleMBFile(file, resultTarget) {
   if (!file) return;
   const mbResultId = resultTarget === 'combined' ? 'result-mb-combined' : 'result-mb';
   showResult(mbResultId, 'Processing…', 'info');
-  takeSnapshot();
   takeSnapshot();
   parseFile(file, (err, rows) => {
     if (err) { showResult(mbResultId, '❌ Error: ' + err, 'error'); return; }
@@ -2182,7 +2434,12 @@ function handleMBFile(file, resultTarget) {
       let newExp = '';
       try {
         const d = new Date(rawDate);
-        if (!isNaN(d)) newExp = d.toISOString().split('T')[0];
+        if (!isNaN(d)) {
+          // Use local date parts to avoid UTC timezone shift (same fix as fmtExp)
+          newExp = d.getFullYear() + '-' +
+            String(d.getMonth()+1).padStart(2,'0') + '-' +
+            String(d.getDate()).padStart(2,'0');
+        }
       } catch {}
       if (!newExp) return;
 
@@ -2368,6 +2625,27 @@ function handleRenewalFile(file) {
     );
     notify(`${matched} devices marked Sent for Renewal`, 'success');
   });
+}
+
+function markAllUpcomingAsSent() {
+  const upcoming = state.hotspots.filter(h => h.tabs && h.tabs.includes('upcoming_renewals') && !h.sent_for_renewal);
+  if (!upcoming.length) { notify('All upcoming renewals are already marked as sent', 'info'); return; }
+  if (!confirm('Mark all ' + upcoming.length + ' upcoming renewal devices as Sent for Renewal?\n\nThis flags them as pending and moves them to the Sent for Renewal tab.')) return;
+  const today = new Date().toLocaleDateString();
+  const events = [];
+  upcoming.forEach(h => {
+    h.sent_for_renewal  = true;
+    h.renewal_sent_date = today;
+    recalcTabs(h);
+    events.push({ type: 'sent_for_renewal', copy_num: h.copy_num, barcode: h.barcode||'',
+      device_type: h.device_type, library: h.library,
+      desc: 'Sent to Mobile Beacon for renewal', detail: 'Exp: ' + (h.exp_date||'—') });
+  });
+  takeSnapshot();
+  recordUpload('Sent for Renewal (Bulk)', events);
+  saveState();
+  updateBadges();
+  notify(upcoming.length + ' devices marked as Sent for Renewal', 'success');
 }
 
 function clearRenewalList() {
@@ -2815,7 +3093,7 @@ function checkAutomaticChanges() {
     snapshot: null, // automatic checks are not undoable
   };
   state.changeHistory.unshift(record);
-  if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
+  if (state.changeHistory.length > 50) state.changeHistory = state.changeHistory.slice(0, 50);
 
   const typeCounts = {};
   newEvents.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0)+1; });
@@ -2853,7 +3131,7 @@ function recordUpload(source, events) {
     snapshot: _preUploadSnapshot, // full state before this upload — used for undo
   };
   state.changeHistory.unshift(record);
-  if (state.changeHistory.length > 20) state.changeHistory = state.changeHistory.slice(0, 20);
+  if (state.changeHistory.length > 50) state.changeHistory = state.changeHistory.slice(0, 50);
 
   // Count events by type for upload history summary
   const typeCounts = {};
@@ -3303,9 +3581,32 @@ function showDetail(barcode) {
       }).join('')
     : '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace">No changes in the last 180 days.</div>';
 
+  // Build timeline HTML — sorted newest first, grouped by date
+  const timelineHtml = recentChanges.length ? (() => {
+    let out = '<div style="max-height:260px;overflow-y:auto;padding-right:4px">';
+    recentChanges.forEach(r => {
+      const dateStr = r.date.split(',')[0];
+      const timeStr = r.date.includes(',') ? r.date.split(',')[1].trim() : '';
+      const detail = r.ev.detail ? '<span style="color:var(--text3)"> — ' + r.ev.detail + '</span>' : '';
+      const srcBadge = '<span style="font-size:9px;color:var(--text3);background:rgba(255,255,255,0.05);' +
+        'border-radius:4px;padding:1px 5px;margin-left:6px">' + r.source + '</span>';
+      out += '<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:5px 0;' +
+        'border-bottom:1px solid var(--border);align-items:start">' +
+        '<div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;padding-top:1px">' +
+          dateStr + (timeStr ? '<br>' + timeStr : '') +
+        '</div>' +
+        '<div style="font-size:11px;font-family:DM Mono,monospace;color:var(--text2)">' +
+          r.ev.desc + detail + srcBadge +
+        '</div></div>';
+    });
+    out += '</div>';
+    return out;
+  })() : '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace;padding:8px 0">' +
+    'No changes recorded in the last 180 days.</div>';
+
   const modalContent = document.getElementById('detail-modal-content');
-  modalContent.innerHTML += '<div class="detail-section-label" style="margin-top:16px">Recent Changes (180 days)</div>' +
-    '<div style="max-height:200px;overflow-y:auto">' + histHtml + '</div>';
+  modalContent.innerHTML += '<div class="detail-section-label" style="margin-top:16px">Change Timeline (180 days)</div>' +
+    timelineHtml;
 
   document.getElementById('detail-overlay').classList.remove('hidden');
 }
@@ -3711,9 +4012,41 @@ function renderHistory() {
       <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">${state.uploadHistory.length} upload${state.uploadHistory.length!==1?'s':''} recorded</div>
     </div>
     <button class="export-btn" style="margin-left:auto" onclick="exportAllChanges()">⬇ Export Changes CSV</button>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
+    <select id="uh-filter-type" onchange="renderHistory()" style="font-family:'DM Mono',monospace;font-size:11px;padding:4px 8px;background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:6px">
+      <option value="">All upload types</option>
+      <option value="LIS Inventory Report">LIS Inventory Report</option>
+      <option value="Mobile Beacon Report">MB Renewal (XLSX/CSV)</option>
+      <option value="MB Invoice PDF (Renewal)">MB Invoice PDF</option>
+      <option value="MB Active List (Reconciliation)">MB Active List</option>
+      <option value="Automatic Daily Check">Automatic Daily Check</option>
+      <option value="Sent for Renewal List">Sent for Renewal</option>
+      <option value="New Devices">New Devices</option>
+    </select>
+    <select id="uh-filter-days" onchange="renderHistory()" style="font-family:'DM Mono',monospace;font-size:11px;padding:4px 8px;background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:6px">
+      <option value="">All time</option>
+      <option value="7">Last 7 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 90 days</option>
+    </select>
+    <span id="uh-filter-count" style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace"></span>
   </div>`;
 
+  // Restore filter values
+  const uhTypeEl = document.getElementById('uh-filter-type');
+  const uhDaysEl = document.getElementById('uh-filter-days');
+  if (uhTypeEl && state._uhFilterType) uhTypeEl.value = state._uhFilterType;
+  if (uhDaysEl && state._uhFilterDays) uhDaysEl.value = state._uhFilterDays;
+  const uhType = uhTypeEl ? uhTypeEl.value : '';
+  const uhDays = uhDaysEl ? parseInt(uhDaysEl.value)||0 : 0;
+  const uhCutoff = uhDays ? Date.now() - uhDays*86400000 : 0;
+
+  let uhVisible = 0;
   state.uploadHistory.forEach((h, i) => {
+    if (uhType && h.source !== uhType) return;
+    if (uhCutoff && new Date(h.date).getTime() < uhCutoff) return;
+    uhVisible++;
     const color = h.profileColor || '#4f8ef7';
     const initial = (h.profileName||'?').charAt(0).toUpperCase();
     const badges = Object.entries(h.typeCounts).map(([type, count]) =>
@@ -3738,6 +4071,16 @@ function renderHistory() {
       </div>
     </div>`;
   });
+
+  // Update filter count display
+  setTimeout(() => {
+    const countEl = document.getElementById('uh-filter-count');
+    if (countEl) countEl.textContent = uhVisible + ' of ' + state.uploadHistory.length + ' uploads shown';
+    const uhTypeEl2 = document.getElementById('uh-filter-type');
+    const uhDaysEl2 = document.getElementById('uh-filter-days');
+    if (uhTypeEl2 && state._uhFilterType != null) uhTypeEl2.value = state._uhFilterType;
+    if (uhDaysEl2 && state._uhFilterDays != null) uhDaysEl2.value = state._uhFilterDays;
+  }, 0);
 
   el.innerHTML = html;
 }
@@ -3811,6 +4154,7 @@ async function saveState() {
     overrideRules:     state.overrideRules     || [],
     lastAlmaReport:    state.lastAlmaReport    || null,
     almaReportHistory: state.almaReportHistory || [],
+    lastLISStatuses:   state.lastLISStatuses   || {},
   };
 
   // Always write full state (with snapshots) to localStorage for undo support
@@ -3836,6 +4180,7 @@ async function saveState() {
       },
       body: JSON.stringify({ data: toSaveCloud }),
     });
+    if (res.ok) { clearSaveBanner(); }
     if (!res.ok) {
       const errText = await res.text();
       console.warn('Supabase PATCH failed (' + res.status + '):', errText);
@@ -3853,14 +4198,15 @@ async function saveState() {
       if (!res2.ok) {
         const err2 = await res2.text();
         console.warn('Supabase upsert also failed (' + res2.status + '):', err2);
-        notify('⚠️ Cloud save failed (' + res2.status + ') — check console for details', 'error');
+        showSaveBanner('Cloud save failed (' + res2.status + ') — working offline. Changes are stored locally.');
       } else {
         console.log('✓ Saved via upsert fallback');
+      clearSaveBanner();
       }
     }
   } catch(e) {
     console.warn('Supabase unreachable:', e.message);
-    notify('⚠️ Cloud save failed — check your internet connection', 'error');
+    showSaveBanner('Cloud save failed — no connection. Working offline. Changes are stored locally.');
   }
 }
 
@@ -3886,6 +4232,7 @@ async function loadState() {
         state.overrideRules     = saved.overrideRules     || [];
         state.lastAlmaReport    = saved.lastAlmaReport    || null;
         state.almaReportHistory = saved.almaReportHistory || [];
+        state.lastLISStatuses   = saved.lastLISStatuses   || {};
         // Snapshots are not stored in Supabase (too large).
         // Restore them from localStorage if available (same browser).
         try {
