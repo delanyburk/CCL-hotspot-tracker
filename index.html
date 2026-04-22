@@ -954,15 +954,18 @@ function recalcTabs(h) {
       tabs.add('archived');
     } else {
       tabs.add('lost_missing');
-      tabs.add('to_deactivate');
+      const hasActiveSub = sub === 'Active' && h.exp_date;
+      if (hasActiveSub) tabs.add('to_deactivate');
     }
     h.tabs = Array.from(tabs);
     return h;
   }
 
   // ── Rules 7 & 8: Inactive (deact/blocked/expired) but in stock or active loan ──
+  // Guard: Lost/Missing process type always takes priority — these devices
+  // should never appear as in_stock or to_be_reactivated regardless of lis_status.
   // Rule 8: in_place + inactive → In Stock + To Reactivate (NOT archived)
-  if (isInPlace && isInactive) {
+  if (isInPlace && isInactive && !isLostProc) {
     tabs.add('in_stock');
     tabs.add('to_be_reactivated');
     h.attention_critical = true;
@@ -971,7 +974,7 @@ function recalcTabs(h) {
   }
 
   // Rule 7: active loan (not overdue) + inactive → Active Loans + To Reactivate (NOT archived)
-  if (isOnLoan && !isOverdue && isInactive) {
+  if (isOnLoan && !isOverdue && isInactive && !isLostProc) {
     tabs.add('active_loans');
     tabs.add('to_be_reactivated');
     h.attention_critical = true;
@@ -980,7 +983,8 @@ function recalcTabs(h) {
   }
 
   // ── Rule 1: In place + active → In Stock ────────────────────────────────
-  if (isInPlace) {
+  // Guard: Lost/Missing process type overrides in-place status
+  if (isInPlace && !isLostProc) {
     tabs.add('in_stock');
     // Upcoming renewals: in_stock + active + exp within 180d
     if (h.exp_date && !isExpired) {
@@ -1027,7 +1031,10 @@ function recalcTabs(h) {
       tabs.add('archived');
     } else {
       tabs.add('lost_missing');
-      tabs.add('to_deactivate');
+      // Only add to_deactivate if there is actually an active subscription to cancel
+      // Unknown/no subscription = nothing to deactivate
+      const hasActiveSub = sub === 'Active' && h.exp_date;
+      if (hasActiveSub) tabs.add('to_deactivate');
     }
     h.tabs = Array.from(tabs);
     return h;
@@ -2415,7 +2422,7 @@ function handleMBFile(file, resultTarget) {
     const sample = rows[0] || {};
     const imeiCol = Object.keys(sample).find(k => /imei|serial.?number|serial.?num/i.test(k));
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
-    const phoneCol = Object.keys(sample).find(k => /phone|msisdn|number/i.test(k));
+    const phoneCol = Object.keys(sample).find(k => /\bphone\b|msisdn|active.?ptn|\bptn\b/i.test(k));
 
     if (!imeiCol) { showResult(mbResultId, '❌ Could not find IMEI column.', 'error'); return; }
     if (!dateCol) { showResult(mbResultId, '❌ Could not find "Latest Service Plan End Date" column.', 'error'); return; }
@@ -2690,7 +2697,7 @@ function handleMBActiveFile(file, resultTarget) {
 
     // Find optional columns
     const dateCol = Object.keys(sample).find(k => /latest.*service.*plan.*end|plan.*end.*date|service.*end/i.test(k));
-    const phoneCol = Object.keys(sample).find(k => /phone|msisdn|number/i.test(k));
+    const phoneCol = Object.keys(sample).find(k => /\bphone\b|msisdn|active.?ptn|\bptn\b/i.test(k));
 
     // Build set of active IMEIs from MB list
     const activeIMEIs = new Set();
@@ -4444,6 +4451,28 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   // If any events were patched, save immediately so Supabase has the fixed version
   if (_patchMadeChanges) saveState();
 
+  // Restore phone numbers that were corrupted by the phoneCol regex bug.
+  // The bug caused phone fields to be overwritten with IMEI values.
+  // Detect: phone looks like an IMEI (14-16 digits, no formatting).
+  // Fix: restore from HOTSPOTS baseline where available.
+  (function restorePhoneNumbers() {
+    const baselinePhones = {};
+    HOTSPOTS.forEach(h => { if (h.barcode && h.phone) baselinePhones[h.barcode] = h.phone; });
+    let fixed = 0;
+    state.hotspots.forEach(h => {
+      if (!h.phone) return;
+      const looksLikeIMEI = /^\d{14,16}$/.test(h.phone.replace(/\s/g,''));
+      if (looksLikeIMEI && baselinePhones[h.barcode]) {
+        h.phone = baselinePhones[h.barcode];
+        fixed++;
+      }
+    });
+    if (fixed > 0) {
+      console.log('Restored ' + fixed + ' corrupted phone numbers from baseline');
+      saveState();
+    }
+  })();
+
   // Run automatic daily check (90d overdue → Lost, expired subs)
   checkAutomaticChanges();
 
@@ -4473,6 +4502,23 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   // Focus password field on load
   setTimeout(() => { const inp = document.getElementById('pw-input'); if (inp) inp.focus(); }, 150);
   // Profile selection is triggered by checkPassword() after successful auth
+
+  // ── Supabase keepalive ─────────────────────────────────────────────────────
+  // Supabase pauses free-tier projects after 7 days of inactivity.
+  // Ping the DB every 4 days while the app is open to prevent that.
+  // Uses a harmless SELECT on hotspot_state — no writes, no cost.
+  async function pingSupabase() {
+    try {
+      await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main&select=id', {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
+      });
+      console.log('Supabase keepalive ping sent — ' + new Date().toLocaleString());
+    } catch(e) {
+      console.warn('Keepalive ping failed:', e.message);
+    }
+  }
+  pingSupabase(); // ping immediately on load
+  setInterval(pingSupabase, 4 * 24 * 60 * 60 * 1000); // then every 4 days
 })();
 </script>
 </body>
