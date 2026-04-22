@@ -3527,6 +3527,20 @@ const TAB_BADGE_STYLES = {
   upcoming_renewals: { label: 'Upcoming Renewals',    bg: 'var(--yellow-bg)', color: 'var(--yellow)', tab: 'upcoming_renewals' },
 };
 
+function forceDeactivate(barcode) {
+  const h = state.hotspots.find(x => x.barcode === barcode);
+  if (!h) return;
+  if (!confirm('Force deactivate c.' + h.copy_num + '?\n\nThis will set sub_status to Deactivated and move the device to Archive. Use this when Mobile Beacon has already deactivated the device but the upload did not register correctly.')) return;
+  takeSnapshot();
+  h.sub_status    = 'Deactivated';
+  h.mb_deactivated = true;
+  recalcTabs(h);
+  saveState();
+  updateBadges();
+  closeDetail();
+  notify('c.' + h.copy_num + ' marked as Deactivated', 'success');
+}
+
 function showDetail(barcode) {
   const h = state.hotspots.find(x => x.barcode === barcode);
   if (!h) return;
@@ -3714,6 +3728,15 @@ function showDetail(barcode) {
     return out;
   })() : '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace;padding:8px 0">' +
     'No changes recorded in the last 180 days.</div>';
+
+  // Add Force Deactivate button for devices on to_deactivate
+  if (h.tabs && h.tabs.includes('to_deactivate')) {
+    const modalContent2 = document.getElementById('detail-modal-content');
+    modalContent2.innerHTML += '<div style="margin-top:12px;padding:10px;background:rgba(255,100,100,0.08);border:1px solid var(--red,#ff6b6b);border-radius:8px;display:flex;align-items:center;gap:12px">' +
+      '<span style="font-size:11px;font-family:DM Mono,monospace;color:var(--text2);flex:1">Mobile Beacon has deactivated this device but it still shows Active. Use this to manually correct it.</span>' +
+      '<button onclick="forceDeactivate(" + h.barcode + ")" style="background:none;border:1px solid var(--red,#ff6b6b);color:var(--red,#ff6b6b);border-radius:6px;padding:5px 12px;cursor:pointer;font-family:DM Mono,monospace;font-size:11px;white-space:nowrap">⬇ Force Deactivate</button>' +
+      '</div>';
+  }
 
   const modalContent = document.getElementById('detail-modal-content');
   modalContent.innerHTML += '<div class="detail-section-label" style="margin-top:16px">Change Timeline (180 days)</div>' +
@@ -4254,7 +4277,15 @@ const SUPABASE_URL = 'https://awvfgdiagcirrwrazzlo.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_qn2lu5reQeF2xl80QPeGBg_SjSTI2Us';
 const STORAGE_KEY  = 'slo_hotspot_db_v1'; // kept as localStorage fallback key
 
-async function saveState() {
+// ── Save queue: debounces rapid saves and retries on failure ──────────────────
+let _saveTimer = null;
+let _saveInFlight = false;
+let _saveQueued = false;
+
+async function _doSave() {
+  if (_saveInFlight) { _saveQueued = true; return; }
+  _saveInFlight = true;
+
   const toSave = {
     hotspots:          state.hotspots,
     profiles:          state.profiles,
@@ -4268,34 +4299,33 @@ async function saveState() {
     lastLISStatuses:   state.lastLISStatuses   || {},
   };
 
-  // Always write full state (with snapshots) to localStorage for undo support
+  // Always write to localStorage immediately (synchronous, never fails)
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)); } catch(e) {}
 
-  // For Supabase: strip snapshots entirely — each is ~178KB and causes save failures.
-  // Snapshots are stored in localStorage only (same machine/browser).
+  // Strip snapshots for Supabase (too large)
   const changeHistoryCloud = state.changeHistory.map(r => {
     const { snapshot, ...rest } = r;
     return rest;
   });
   const toSaveCloud = { ...toSave, changeHistory: changeHistoryCloud };
+  const body = JSON.stringify({ data: toSaveCloud });
 
-  try {
-    // Try PATCH first (update existing row)
-    const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
-        'Prefer': 'return=minimal',
-      },
-      body: JSON.stringify({ data: toSaveCloud }),
-    });
-    if (res.ok) { clearSaveBanner(); }
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn('Supabase PATCH failed (' + res.status + '):', errText);
-      // Try upsert as fallback in case row doesn't exist
+  let success = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (attempt > 1) await new Promise(r => setTimeout(r, attempt * 1000));
+      const res = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state?id=eq.main', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_KEY,
+          'Prefer': 'return=minimal',
+        },
+        body,
+      });
+      if (res.ok) { success = true; break; }
+      // Row might not exist — try upsert
       const res2 = await fetch(SUPABASE_URL + '/rest/v1/hotspot_state', {
         method: 'POST',
         headers: {
@@ -4306,20 +4336,38 @@ async function saveState() {
         },
         body: JSON.stringify({ id: 'main', data: toSaveCloud }),
       });
-      if (!res2.ok) {
-        const err2 = await res2.text();
-        console.warn('Supabase upsert also failed (' + res2.status + '):', err2);
-        showSaveBanner('Cloud save failed (' + res2.status + ') — working offline. Changes are stored locally.');
-      } else {
-        console.log('✓ Saved via upsert fallback');
-      clearSaveBanner();
-      }
+      if (res2.ok) { success = true; break; }
+      console.warn('Save attempt ' + attempt + ' failed: ' + res.status);
+    } catch(e) {
+      console.warn('Save attempt ' + attempt + ' error:', e.message);
     }
-  } catch(e) {
-    console.warn('Supabase unreachable:', e.message);
-    showSaveBanner('Cloud save failed — no connection. Working offline. Changes are stored locally.');
+  }
+
+  if (success) {
+    clearSaveBanner();
+  } else {
+    showSaveBanner('Cloud save failed after 3 attempts — data is safe locally. Will retry on next action.');
+  }
+
+  _saveInFlight = false;
+
+  // If another save was requested while we were in-flight, run it now
+  if (_saveQueued) {
+    _saveQueued = false;
+    _doSave();
   }
 }
+
+function saveState() {
+  // Debounce: if called rapidly, wait 400ms then do one save
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(_doSave, 400);
+}
+
+// Legacy async alias (for any call sites that do await saveState())
+async function saveStateAsync() { return _doSave(); }
+
+
 
 async function loadState() {
   // Try Supabase first
