@@ -2794,6 +2794,25 @@ function handleMBActiveFile(file, resultTarget) {
       }
     });
 
+    // Second pass: catch any devices that are on the 'to_deactivate' tab
+    // but whose IMEI wasn't matched in the active list above.
+    // This handles IMEI format mismatches and edge-case sub_status values.
+    state.hotspots.forEach(h => {
+      if (!h.tabs || !h.tabs.includes('to_deactivate')) return;
+      if (!h.imei) return;
+      const imei = String(h.imei).trim();
+      // If this device's IMEI is genuinely not on the MB active list, deactivate it
+      if (!activeIMEIs.has(imei) &&
+          h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
+        changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
+        h.sub_status = 'Deactivated';
+        h.mb_deactivated = true;
+        h.last_mb_updated = true;
+        recalcTabs(h);
+        deactivated++;
+      }
+    });
+
     state.changeLog = changes;
     state.lastUpdated = new Date().toLocaleDateString();
     document.getElementById('footer-date').textContent = state.lastUpdated;
