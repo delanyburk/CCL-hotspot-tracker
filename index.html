@@ -1818,7 +1818,7 @@ function handleMBInvoicePDF(file) {
       document.getElementById('footer-date').textContent = state.lastUpdated;
       recordUpload('MB Invoice PDF (Renewal)', events);
       updateBadges();
-      saveState();
+      _doSave();
 
       const summary = '✅ PDF invoice processed — ' + renewals.length + ' devices found.<br>' +
         '<strong>' + updated + '</strong> expiration dates updated' +
@@ -1901,7 +1901,7 @@ function handleMBDeactivationFile(file) {
 
     if (events.length) {
       recordUpload('MB Deactivation Report', events);
-      saveState();
+      _doSave();
     }
     updateBadges();
 
@@ -2402,7 +2402,7 @@ function handleLISFile(file) {
 
     const summary = `✅ Processed ${rows.length} rows — ${updated} updated, ${added} new devices added, ${changes.length} field changes detected.${flagged.length ? '<br>⚡ ' + flagged.join('<br>') : ''}`;
     showResult('result-lis', summary, 'success');
-    saveState();
+    _doSave();
     notify(`LIS upload complete: ${updated} updated, ${added} new`, 'success');
   });
 }
@@ -2487,7 +2487,7 @@ function handleMBFile(file, resultTarget) {
     updateBadges();
 
     showResult(mbResultId, `✅ Processed ${rows.length} rows — ${matched} IMEI matches, ${changes.length} expiration dates updated, ${unmatched} unmatched IMEIs.`, 'success');
-    saveState();
+    _doSave();
     notify(`MB upload: ${changes.length} exp dates updated`, 'success');
   });
 }
@@ -2543,7 +2543,7 @@ function handleNewFile(file) {
     recordUpload('New Devices', changes.map(c => ({ type: 'new_device', raw: c })));
     updateBadges();
     showResult('result-new', `✅ Added ${added} new devices. ${skipped} skipped (already in system).`, 'success');
-    saveState();
+    _doSave();
     notify(`${added} new devices added`, 'success');
   });
 }
@@ -2622,7 +2622,7 @@ function handleRenewalFile(file) {
 
     if (matched) {
       recordUpload('Sent for Renewal List', events);
-      saveState();
+      _doSave();
       updateBadges();
     }
 
@@ -2650,7 +2650,7 @@ function markAllUpcomingAsSent() {
   });
   takeSnapshot();
   recordUpload('Sent for Renewal (Bulk)', events);
-  saveState();
+  _doSave();
   updateBadges();
   notify(upcoming.length + ' devices marked as Sent for Renewal', 'success');
 }
@@ -2665,7 +2665,7 @@ function clearRenewalList() {
       h.renewal_sent_date = null;
     }
   });
-  saveState();
+  _doSave();
   updateBadges();
   notify(`Cleared ${count} devices from Sent for Renewal`, 'success');
   if (state.page === 'upload') renderUpload();
@@ -2831,7 +2831,7 @@ function handleMBActiveFile(file, resultTarget) {
       <strong>${updated}</strong> records updated (exp date / phone) &nbsp;·&nbsp;
       <strong>${skipped}</strong> skipped (no IMEI on record)`;
     showResult(mbResultId, summary, deactivated > 0 ? 'info' : 'success');
-    saveState();
+    _doSave();
     notify(`MB reconciliation complete: ${deactivated} deactivated, ${updated} updated`, deactivated > 0 ? 'info' : 'success');
   });
 }
