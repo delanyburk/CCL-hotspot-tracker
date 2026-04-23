@@ -2724,7 +2724,8 @@ function handleMBActiveFile(file, resultTarget) {
     state.hotspots.forEach(h => {
       if (!h.imei) { skipped++; return; }
 
-      const imei = String(h.imei).trim();
+      const imei = String(h.imei).trim().replace(/\D/g, '');
+      if (!imei || imei.length < 14) { skipped++; return; }
 
       if (activeIMEIs.has(imei)) {
         // Device IS on MB active list — update exp date and phone if available
@@ -2785,11 +2786,15 @@ function handleMBActiveFile(file, resultTarget) {
         // Only flag if not already deactivated/blocked
         if (h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
           changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
-          h.sub_status = 'Deactivated';
+          h.sub_status    = 'Deactivated';
           h.mb_deactivated = true;
-          h.last_mb_updated = true; // flag for Alma export
+          h.on_mb_active   = false; // marks as confirmed-not-on-list for init recovery
+          h.last_mb_updated = true;
           recalcTabs(h);
           deactivated++;
+        } else {
+          // Already deactivated/blocked — still mark as not on active list
+          h.on_mb_active = false;
         }
       }
     });
@@ -2800,13 +2805,15 @@ function handleMBActiveFile(file, resultTarget) {
     state.hotspots.forEach(h => {
       if (!h.tabs || !h.tabs.includes('to_deactivate')) return;
       if (!h.imei) return;
-      const imei = String(h.imei).trim();
+      const imei = String(h.imei).trim().replace(/\D/g, '');
+      if (!imei) return;
       // If this device's IMEI is genuinely not on the MB active list, deactivate it
       if (!activeIMEIs.has(imei) &&
           h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
         changes.push(`c.${h.copy_num} (IMEI ${imei}) — <span class="ch-old">${h.sub_status}</span> → <span class="ch-new">Deactivated (not on MB active list)</span>`);
-        h.sub_status = 'Deactivated';
+        h.sub_status    = 'Deactivated';
         h.mb_deactivated = true;
+        h.on_mb_active   = false;
         h.last_mb_updated = true;
         recalcTabs(h);
         deactivated++;
@@ -3729,14 +3736,7 @@ function showDetail(barcode) {
   })() : '<div style="font-size:11px;color:var(--text3);font-family:DM Mono,monospace;padding:8px 0">' +
     'No changes recorded in the last 180 days.</div>';
 
-  // Add Force Deactivate button for devices on to_deactivate
-  if (h.tabs && h.tabs.includes('to_deactivate')) {
-    const modalContent2 = document.getElementById('detail-modal-content');
-    modalContent2.innerHTML += '<div style="margin-top:12px;padding:10px;background:rgba(255,100,100,0.08);border:1px solid var(--red,#ff6b6b);border-radius:8px;display:flex;align-items:center;gap:12px">' +
-      '<span style="font-size:11px;font-family:DM Mono,monospace;color:var(--text2);flex:1">Mobile Beacon has deactivated this device but it still shows Active. Use this to manually correct it.</span>' +
-      '<button onclick="forceDeactivate(" + h.barcode + ")" style="background:none;border:1px solid var(--red,#ff6b6b);color:var(--red,#ff6b6b);border-radius:6px;padding:5px 12px;cursor:pointer;font-family:DM Mono,monospace;font-size:11px;white-space:nowrap">⬇ Force Deactivate</button>' +
-      '</div>';
-  }
+
 
   const modalContent = document.getElementById('detail-modal-content');
   modalContent.innerHTML += '<div class="detail-section-label" style="margin-top:16px">Change Timeline (180 days)</div>' +
@@ -4539,6 +4539,23 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
       saveState();
     }
   })();
+
+  // One-time fix: deactivate any device confirmed as not on MB active list
+  // (on_mb_active===false means MB upload ran but save failed before deactivation saved)
+  let _deactFixed = 0;
+  state.hotspots.forEach(h => {
+    if (h.on_mb_active === false &&
+        h.sub_status !== 'Deactivated' && h.sub_status !== 'Blocked') {
+      h.sub_status    = 'Deactivated';
+      h.mb_deactivated = true;
+      recalcTabs(h);
+      _deactFixed++;
+    }
+  });
+  if (_deactFixed > 0) {
+    console.log('Auto-corrected ' + _deactFixed + ' devices not on MB active list');
+    _patchMadeChanges = true; // trigger save
+  }
 
   // Run automatic daily check (90d overdue → Lost, expired subs)
   checkAutomaticChanges();
