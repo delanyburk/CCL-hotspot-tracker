@@ -767,7 +767,7 @@
 <div id="main">
   <div id="topbar">
     <div class="page-title" id="topbar-title">Dashboard</div>
-    <div class="last-updated">Today: March 18, 2026</div>
+    <div class="last-updated" id="today-display"></div>
     <div class="profile-chip" onclick="showProfileSelector()" id="active-profile-chip" title="Switch profile">
       <div class="chip-avatar" id="chip-avatar" style="background:#4f8ef7">?</div>
       <span class="chip-name" id="chip-name">Select Profile</span>
@@ -4585,6 +4585,9 @@ document.getElementById('pw-overlay').innerHTML += `<div id="db-loading" style="
   if (el) el.remove();
 
   document.getElementById('footer-date').textContent = state.lastUpdated;
+  // Always show real today's date — not the last upload date
+  const todayEl = document.getElementById('today-display');
+  if (todayEl) todayEl.textContent = 'Today: ' + new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   showPage('dashboard');
   updateBadges();
   // Focus password field on load
