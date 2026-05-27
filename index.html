@@ -2574,47 +2574,127 @@ function handleNewFile(file) {
     if (err) { showResult('result-new', '❌ Error: ' + err, 'error'); return; }
 
     const sample = rows[0] || {};
-    const barcodeCol = Object.keys(sample).find(k => /barcode/i.test(k));
-    if (!barcodeCol) { showResult('result-new', '❌ Could not find Barcode column.', 'error'); return; }
 
-    const existing = new Set(state.hotspots.map(h=>h.barcode));
-    let added = 0, skipped = 0;
+    // Use the same column detection as the LIS handler — supports both old and new Alma formats
+    function findCol(row, keys) { for (const k of keys) if (k in row) return k; return null; }
+    const cols = {
+      barcode:    findCol(sample, ['Barcode','barcode','BARCODE']),
+      icn:        findCol(sample, ['Item Call Number','item call number','ItemCallNumber']),
+      status:     findCol(sample, ['Status','status']),
+      callnum:    findCol(sample, ['Call Number','call number','CallNumber']),
+      desc:       findCol(sample, ['Description','description','DESCRIPTION']),
+      due:        findCol(sample, ['Due Date','due date','DueDate']),
+      proc:       findCol(sample, ['Process type','Process Type','process type','ProcessType']),
+      library:    findCol(sample, ['Library','library']),
+      inv_number: findCol(sample, ['inventory_number','Inventory Number','InventoryNumber']),
+      note1:      findCol(sample, ['internal_note_1','Internal Note 1']),
+      note2:      findCol(sample, ['internal_note_2','Internal Note 2']),
+      note3:      findCol(sample, ['internal_note_3','Internal Note 3']),
+      copy_id:    findCol(sample, ['copy_id','Copy ID','CopyID']),
+      alt_call:   findCol(sample, ['alternative_call_number','Alternative Call Number']),
+    };
+
+    if (!cols.barcode) { showResult('result-new', '❌ Could not find Barcode column.', 'error'); return; }
+
+    const existing = new Set(state.hotspots.map(h => h.barcode));
+    let added = 0, skipped = 0, errors = 0;
     const changes = [];
+    const eventsList = [];
 
     rows.forEach(row => {
-      const barcode = String(row[barcodeCol]||'').trim();
-      if (!barcode || existing.has(barcode)) { skipped++; return; }
+      const barcode = String(row[cols.barcode]||'').trim();
+      if (!barcode) return;
+      if (existing.has(barcode)) { skipped++; return; }
 
-      const icn = String(row['Item Call Number']||row['ItemCallNumber']||'').trim();
-      const cn = String(row['Call Number']||row['CallNumber']||'').trim();
-      const desc = String(row['Description']||'').trim();
-      const proc = String(row['Process type']||row['ProcessType']||'').trim();
-      const stat = String(row['Status']||'').trim();
-      const due = normDueDate(row['Due Date']||row['DueDate']||'');
-      const lib = String(row['Library']||'').trim();
+      // Extract each field — prefer new Alma columns, fall back to old extraction helpers
+      const icn     = cols.icn     ? String(row[cols.icn]    ||'').trim() : '';
+      const cn      = cols.callnum ? String(row[cols.callnum]||'').trim() : '';
+      const desc    = cols.desc    ? String(row[cols.desc]   ||'').trim() : '';
+      const proc    = cols.proc    ? String(row[cols.proc]   ||'').trim() : '';
+      const stat    = cols.status  ? String(row[cols.status] ||'').trim() : '';
+      const due     = cols.due     ? normDueDate(row[cols.due]) : '';
+      const lib     = cols.library ? String(row[cols.library]||'').trim() : '';
+
+      // New Alma format columns
+      const note1   = cols.note1      ? String(row[cols.note1]      ||'').trim() : '';
+      const note2   = cols.note2      ? String(row[cols.note2]      ||'').trim() : '';
+      const invNum  = cols.inv_number ? String(row[cols.inv_number] ||'').trim() : '';
+      const note3   = cols.note3      ? String(row[cols.note3]      ||'').trim() : '';
+      const copyId  = cols.copy_id    ? String(row[cols.copy_id]    ||'').trim() : '';
+      const altCall = cols.alt_call   ? String(row[cols.alt_call]   ||'').trim() : '';
+
+      // IMEI: internal_note_1 → Item Call Number extraction
+      const imei = (note1 && /^\d{14,16}$/.test(note1.replace(/\s/g,'')))
+        ? note1.replace(/\s/g,'') : extractIMEI(icn);
+
+      // Phone: internal_note_2 → Item Call Number extraction
+      const phone = note2 || extractPhone(icn);
+
+      // Copy number: copy_id ("c. 332") → alternative_call_number → Description extraction
+      const copyNumRaw = copyId || altCall;
+      const copyNum = copyNumRaw
+        ? (parseInt(copyNumRaw.replace(/[^\d]/g,'')) || extractCopyNum(desc))
+        : extractCopyNum(desc);
+
+      // Device type: derive from IMEI length/prefix, call number, or description
+      const deviceType = getDeviceType(icn || imei, cn || desc);
+
+      // Program: from call number or description
+      const program = getProgram(cn || desc);
+
+      // Exp date: inventory_number → internal_note_3 → description extraction
+      const expDate = parseAlmaExpDate(invNum, note3) || extractExpDate(desc);
 
       const newH = {
-        barcode, imei: extractIMEI(icn), imei_verified: true,
-        copy_num: extractCopyNum(desc), phone: extractPhone(icn),
-        device_type: getDeviceType(icn, cn), program: getProgram(cn),
-        description: desc, call_number: cn, lis_status: stat,
-        process_type: proc, due_date: due, sub_status: getSubStatus(desc),
-        exp_date: extractExpDate(desc), is_overdue: false, days_overdue: 0,
-        in_archive: false, library: lib, tabs: [],
+        barcode,
+        imei,          imei_verified: !!note1,
+        copy_num:      copyNum,
+        phone,
+        device_type:   deviceType,
+        program,
+        description:   desc || invNum,
+        call_number:   cn,
+        lis_status:    stat || 'Item not in place',
+        process_type:  proc,
+        due_date:      due,
+        sub_status:    expDate ? 'Active' : 'Unknown',
+        exp_date:      expDate,
+        is_overdue:    false,
+        days_overdue:  0,
+        in_archive:    false,
+        library:       lib,
+        tabs:          [],
+        pending_renewal:  false,
+        sent_for_renewal: false,
+        on_mb_active:     null,
       };
+
       recalcTabs(newH);
       state.hotspots.push(newH);
       existing.add(barcode);
-      changes.push(`<span class="ch-new">ADD</span> c.${newH.copy_num} — ${barcode} (${newH.device_type})`);
+
+      const label = 'c.' + (copyNum||'?') + ' — ' + barcode + (deviceType ? ' (' + deviceType + ')' : '');
+      changes.push('<span class="ch-new">ADD</span> ' + label);
+      eventsList.push({
+        type: 'new_device', copy_num: copyNum, barcode, device_type: deviceType,
+        library: lib, desc: 'New device added', detail: expDate ? 'Exp: ' + expDate : '',
+      });
       added++;
     });
 
+    if (!added) {
+      showResult('result-new', '⚠️ No new devices added. ' + skipped + ' already in system.', 'info');
+      return;
+    }
+
     state.changeLog = changes;
-    recordUpload('New Devices', changes.map(c => ({ type: 'new_device', raw: c })));
+    recordUpload('New Devices', eventsList);
     updateBadges();
-    showResult('result-new', `✅ Added ${added} new devices. ${skipped} skipped (already in system).`, 'success');
+    showResult('result-new',
+      '✅ Added ' + added + ' new devices.' + (skipped ? ' ' + skipped + ' already in system (skipped).' : ''),
+      'success');
     _doSave();
-    notify(`${added} new devices added`, 'success');
+    notify(added + ' new devices added', 'success');
   });
 }
 
