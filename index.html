@@ -3853,7 +3853,7 @@ function showDetail(barcode) {
           notify('IMEI must be 14–16 digits', 'error');
           return;
         }
-        updateHotspotIMEI('${h.barcode}', newIMEI);
+        updateHotspotIMEI(h.barcode, newIMEI);
       };
     }
   }, 0);
