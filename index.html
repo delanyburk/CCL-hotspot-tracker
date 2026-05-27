@@ -2332,7 +2332,15 @@ function handleLISFile(file) {
       copy_id:       ['copy_id','Copy ID','CopyID'],
     };
     function findCol(row, keys) {
+      // Exact match first
       for (const k of keys) if (k in row) return k;
+      // Trimmed lowercase fallback — handles Alma whitespace/casing variations
+      const normMap = {};
+      Object.keys(row).forEach(k => { normMap[k.trim().toLowerCase()] = k; });
+      for (const k of keys) {
+        const found = normMap[k.trim().toLowerCase()];
+        if (found) return found;
+      }
       return null;
     }
     const sample = rows[0] || {};
@@ -2576,7 +2584,19 @@ function handleNewFile(file) {
     const sample = rows[0] || {};
 
     // Use the same column detection as the LIS handler — supports both old and new Alma formats
-    function findCol(row, keys) { for (const k of keys) if (k in row) return k; return null; }
+    // Normalize keys to trimmed lowercase for robust matching against Alma exports
+    const _sampleNorm = {};
+    Object.keys(sample).forEach(k => { _sampleNorm[k.trim().toLowerCase()] = k; });
+    function findCol(row, keys) {
+      // First try exact match
+      for (const k of keys) if (k in row) return k;
+      // Then try trimmed lowercase match (handles Alma whitespace/casing variations)
+      for (const k of keys) {
+        const norm = k.trim().toLowerCase();
+        if (_sampleNorm[norm]) return _sampleNorm[norm];
+      }
+      return null;
+    }
     const cols = {
       barcode:    findCol(sample, ['Barcode','barcode','BARCODE']),
       icn:        findCol(sample, ['Item Call Number','item call number','ItemCallNumber']),
@@ -2623,9 +2643,11 @@ function handleNewFile(file) {
       const copyId  = cols.copy_id    ? String(row[cols.copy_id]    ||'').trim() : '';
       const altCall = cols.alt_call   ? String(row[cols.alt_call]   ||'').trim() : '';
 
-      // IMEI: internal_note_1 → Item Call Number extraction
-      const imei = (note1 && /^\d{14,16}$/.test(note1.replace(/\s/g,'')))
-        ? note1.replace(/\s/g,'') : extractIMEI(icn);
+      // IMEI: internal_note_1 → description extraction → Item Call Number extraction
+      const _note1clean = note1.replace(/\s/g,'');
+      const imei = (note1 && /^\d{14,16}$/.test(_note1clean))
+        ? _note1clean
+        : (extractIMEI(desc) || extractIMEI(icn));
 
       // Phone: internal_note_2 → Item Call Number extraction
       const phone = note2 || extractPhone(icn);
@@ -2643,7 +2665,9 @@ function handleNewFile(file) {
       const program = getProgram(cn || desc);
 
       // Exp date: inventory_number → internal_note_3 → description extraction
-      const expDate = parseAlmaExpDate(invNum, note3) || extractExpDate(desc);
+      const expDate = parseAlmaExpDate(invNum, note3)
+        || extractExpDate(desc)
+        || extractExpDate(invNum);
 
       const newH = {
         barcode,
