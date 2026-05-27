@@ -3810,6 +3810,16 @@ function showDetail(barcode) {
         <button class="override-btn" id="override-imei-btn">Save IMEI</button>
       </div>
 
+      <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin-top:10px;margin-bottom:6px">Edit Barcode</div>
+      <div class="override-row">
+        <input class="pm-input" id="override-barcode-input" type="text"
+          placeholder="Enter correct barcode"
+          value="${h.barcode || ''}"
+          maxlength="30"
+          style="flex:1;font-size:12px;padding:7px 10px">
+        <button class="override-btn" id="override-barcode-btn">Save Barcode</button>
+      </div>
+
       <div style="font-size:10px;color:var(--text3);font-family:DM Mono,monospace;margin:10px 0 6px">Move to / Remove from List</div>
       <div class="override-row">
         <select class="override-select" id="override-tab-select">
@@ -3854,6 +3864,17 @@ function showDetail(barcode) {
           return;
         }
         updateHotspotIMEI(h.barcode, newIMEI);
+      };
+    }
+
+    // Wire barcode save button
+    const barcodeBtn   = document.getElementById('override-barcode-btn');
+    const barcodeInput = document.getElementById('override-barcode-input');
+    if (barcodeBtn && barcodeInput) {
+      barcodeBtn.onclick = () => {
+        const newBarcode = barcodeInput.value.trim();
+        if (!newBarcode) { notify('Barcode cannot be empty', 'error'); return; }
+        updateHotspotBarcode(h.barcode, newBarcode);
       };
     }
   }, 0);
@@ -3940,6 +3961,33 @@ const ALL_TABS = [
   { id: 'to_be_reactivated', label: 'To Reactivate' },
   { id: 'upcoming_renewals', label: 'Upcoming Renewals' },
 ];
+
+function updateHotspotBarcode(oldBarcode, newBarcode) {
+  // Check new barcode isn't already taken by another device
+  const conflict = state.hotspots.find(x => x.barcode === newBarcode);
+  if (conflict && conflict.barcode !== oldBarcode) {
+    notify('Barcode ' + newBarcode + ' is already assigned to c.' + conflict.copy_num, 'error');
+    return;
+  }
+  const h = state.hotspots.find(x => x.barcode === oldBarcode);
+  if (!h) { notify('Device not found', 'error'); return; }
+  if (oldBarcode === newBarcode) { notify('Barcode unchanged', 'info'); return; }
+
+  // Update barcode on the device
+  h.barcode = newBarcode;
+
+  // Also update barcode in any stored change history events for this device
+  state.changeHistory.forEach(record => {
+    (record.events || []).forEach(ev => {
+      if (ev.barcode === oldBarcode) ev.barcode = newBarcode;
+    });
+  });
+
+  recalcTabs(h);
+  _doSave();
+  notify('Barcode updated for c.' + h.copy_num, 'success');
+  showDetail(newBarcode); // refresh modal with new barcode
+}
 
 function updateHotspotIMEI(barcode, newIMEI) {
   const h = state.hotspots.find(x => x.barcode === barcode);
